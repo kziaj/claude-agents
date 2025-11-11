@@ -1,0 +1,312 @@
+#!/bin/bash
+
+# Claude Command: Bulk Model Rename
+# Usage: bulk-model-rename PATTERN REPLACEMENT [--dry-run]
+# Description: Pattern-based bulk model renaming with reference updates across entire dbt project
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_action() {
+    echo -e "${PURPLE}[ACTION]${NC} $1"
+}
+
+# Function to show usage
+show_usage() {
+    echo "Usage: bulk-model-rename PATTERN REPLACEMENT [--dry-run]"
+    echo ""
+    echo "Performs pattern-based bulk model renaming by:"
+    echo "  1. Finding all model files matching PATTERN"
+    echo "  2. Renaming files using regex replacement"
+    echo "  3. Updating YAML model name fields"
+    echo "  4. Updating all ref() calls across SQL and YAML files"
+    echo "  5. Validating no broken references remain"
+    echo "  6. Staging changes with git (organized by layer)"
+    echo ""
+    echo "Arguments:"
+    echo "  PATTERN      - Regex pattern to match in model names"
+    echo "  REPLACEMENT  - Replacement string (use empty string \"\" to remove)"
+    echo "  --dry-run    - Preview changes without executing"
+    echo ""
+    echo "Examples:"
+    echo "  # Remove _v2 suffix from all models"
+    echo "  bulk-model-rename '_v2$' ''"
+    echo ""
+    echo "  # Replace 'old' with 'new' in model names"
+    echo "  bulk-model-rename 'old' 'new'"
+    echo ""
+    echo "  # Preview changes without executing"
+    echo "  bulk-model-rename '_v2$' '' --dry-run"
+}
+
+# Validate input
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+    print_error "Invalid number of arguments"
+    show_usage
+    exit 1
+fi
+
+PATTERN="$1"
+REPLACEMENT="$2"
+DRY_RUN=false
+
+if [ $# -eq 3 ] && [ "$3" == "--dry-run" ]; then
+    DRY_RUN=true
+fi
+
+# Detect project directory
+if [ -f "dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$(pwd)"
+elif [ -d "$HOME/ds-redshift" ] && [ -f "$HOME/ds-redshift/dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$HOME/ds-redshift"
+elif [ -d "$HOME/carta/ds-dbt" ] && [ -f "$HOME/carta/ds-dbt/dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$HOME/carta/ds-dbt"
+else
+    print_error "Could not find dbt project. Run from project directory or ensure ~/ds-redshift exists"
+    exit 1
+fi
+
+RESULTS_DIR="$HOME/.claude/results/bulk-renames"
+mkdir -p "$RESULTS_DIR"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+REPORT_FILE="$RESULTS_DIR/rename_${TIMESTAMP}.md"
+
+print_status "═══════════════════════════════════════════════"
+print_status "Bulk Model Rename"
+print_status "═══════════════════════════════════════════════"
+print_status "Pattern: $PATTERN"
+print_status "Replacement: $REPLACEMENT"
+print_status "Project Dir: $DBT_PROJECT_DIR"
+if [ "$DRY_RUN" = true ]; then
+    print_warning "DRY RUN MODE - No changes will be made"
+fi
+echo ""
+
+cd "$DBT_PROJECT_DIR"
+
+# Step 1: Find all matching models
+print_status "Step 1: Finding models matching pattern..."
+
+# Find SQL files matching pattern
+MATCHING_FILES=$(find models -name "*.sql" -type f | while read file; do
+    basename=$(basename "$file" .sql)
+    if echo "$basename" | grep -qE "$PATTERN"; then
+        echo "$file"
+    fi
+done)
+
+if [ -z "$MATCHING_FILES" ]; then
+    print_warning "No models found matching pattern: $PATTERN"
+    exit 0
+fi
+
+MODEL_COUNT=$(echo "$MATCHING_FILES" | wc -l | tr -d ' ')
+print_success "Found $MODEL_COUNT models matching pattern"
+
+# Initialize report
+cat > "$REPORT_FILE" << EOF
+# Bulk Model Rename Report
+**Date:** $(date)
+**Pattern:** \`$PATTERN\`
+**Replacement:** \`$REPLACEMENT\`
+**Dry Run:** $DRY_RUN
+
+## Models to Rename
+
+EOF
+
+# Step 2: Plan renames
+print_status "Step 2: Planning renames..."
+
+declare -A RENAME_MAP
+declare -A YAML_FILES
+
+while IFS= read -r file; do
+    if [ -z "$file" ]; then
+        continue
+    fi
+    
+    old_basename=$(basename "$file" .sql)
+    new_basename=$(echo "$old_basename" | sed -E "s/$PATTERN/$REPLACEMENT/")
+    
+    if [ "$old_basename" != "$new_basename" ]; then
+        old_path="$file"
+        new_path="$(dirname "$file")/${new_basename}.sql"
+        
+        RENAME_MAP["$old_path"]="$new_path"
+        
+        # Check for YAML file
+        old_yaml="$(dirname "$file")/${old_basename}.yml"
+        if [ -f "$old_yaml" ]; then
+            new_yaml="$(dirname "$file")/${new_basename}.yml"
+            YAML_FILES["$old_yaml"]="$new_yaml"
+        fi
+        
+        echo "- \`$old_basename\` → \`$new_basename\`" >> "$REPORT_FILE"
+        print_action "  $old_basename → $new_basename"
+    fi
+done <<< "$MATCHING_FILES"
+
+echo "" >> "$REPORT_FILE"
+echo "**Total Models:** ${#RENAME_MAP[@]}" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+
+if [ ${#RENAME_MAP[@]} -eq 0 ]; then
+    print_warning "No renames needed (pattern may already be applied)"
+    exit 0
+fi
+
+if [ "$DRY_RUN" = true ]; then
+    print_warning "Dry run complete. Report saved to: $REPORT_FILE"
+    cat "$REPORT_FILE"
+    exit 0
+fi
+
+# Step 3: Perform file renames
+print_status "Step 3: Renaming files..."
+
+for old_path in "${!RENAME_MAP[@]}"; do
+    new_path="${RENAME_MAP[$old_path]}"
+    old_name=$(basename "$old_path" .sql)
+    new_name=$(basename "$new_path" .sql)
+    
+    # Rename SQL file
+    git mv "$old_path" "$new_path"
+    print_success "  Renamed: $old_name.sql → $new_name.sql"
+    
+    # Rename YAML file if exists
+    old_yaml="$(dirname "$old_path")/${old_name}.yml"
+    if [ -f "$old_yaml" ]; then
+        new_yaml="$(dirname "$new_path")/${new_name}.yml"
+        git mv "$old_yaml" "$new_yaml"
+        
+        # Update model name in YAML
+        sed -i.bak "s/  - name: ${old_name}/  - name: ${new_name}/" "$new_yaml"
+        rm -f "${new_yaml}.bak"
+        git add "$new_yaml"
+        
+        print_success "  Updated YAML: ${old_name}.yml → ${new_name}.yml"
+    fi
+done
+
+# Step 4: Update all references
+print_status "Step 4: Updating references across project..."
+
+echo "## Reference Updates" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+
+for old_path in "${!RENAME_MAP[@]}"; do
+    old_name=$(basename "$old_path" .sql)
+    new_name=$(basename "${RENAME_MAP[$old_path]}" .sql)
+    
+    # Find all SQL files with references
+    SQL_REFS=$(grep -rl "ref('${old_name}')" models/ snapshots/ 2>/dev/null || true)
+    
+    if [ -n "$SQL_REFS" ]; then
+        ref_count=$(echo "$SQL_REFS" | wc -l | tr -d ' ')
+        echo "- Updated \`ref('${old_name}')\` in $ref_count SQL files" >> "$REPORT_FILE"
+        
+        while IFS= read -r ref_file; do
+            if [ -n "$ref_file" ]; then
+                sed -i.bak "s/ref('${old_name}')/ref('${new_name}')/g" "$ref_file"
+                rm -f "${ref_file}.bak"
+                git add "$ref_file"
+            fi
+        done <<< "$SQL_REFS"
+        
+        print_success "  Updated ref('${old_name}') in $ref_count SQL files"
+    fi
+    
+    # Find all YAML files with references  
+    YAML_REFS=$(grep -rl "model.warehouse.${old_name}" models/ 2>/dev/null || true)
+    
+    if [ -n "$YAML_REFS" ]; then
+        yaml_count=$(echo "$YAML_REFS" | wc -l | tr -d ' ')
+        echo "- Updated \`model.warehouse.${old_name}\` in $yaml_count YAML files" >> "$REPORT_FILE"
+        
+        while IFS= read -r yaml_file; do
+            if [ -n "$yaml_file" ]; then
+                sed -i.bak "s/model.warehouse.${old_name}/model.warehouse.${new_name}/g" "$yaml_file"
+                rm -f "${yaml_file}.bak"
+                git add "$yaml_file"
+            fi
+        done <<< "$YAML_REFS"
+        
+        print_success "  Updated model.warehouse.${old_name} in $yaml_count YAML files"
+    fi
+done
+
+# Step 5: Validate no broken references
+print_status "Step 5: Validating references..."
+
+BROKEN_REFS=""
+
+for old_path in "${!RENAME_MAP[@]}"; do
+    old_name=$(basename "$old_path" .sql)
+    
+    # Check if old name still referenced anywhere
+    REMAINING=$(grep -r "ref('${old_name}')" models/ snapshots/ 2>/dev/null || true)
+    
+    if [ -n "$REMAINING" ]; then
+        BROKEN_REFS="$BROKEN_REFS\n  - ref('${old_name}') still found in:\n$REMAINING"
+        print_warning "  Found remaining references to old name: ${old_name}"
+    fi
+done
+
+if [ -n "$BROKEN_REFS" ]; then
+    echo "" >> "$REPORT_FILE"
+    echo "## ⚠️ Validation Warnings" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+    echo "$BROKEN_REFS" >> "$REPORT_FILE"
+    print_warning "Some references may need manual review (see report)"
+else
+    echo "" >> "$REPORT_FILE"
+    echo "## ✅ Validation" >> "$REPORT_FILE"
+    echo "All references updated successfully - no broken refs detected" >> "$REPORT_FILE"
+    print_success "  All references validated successfully"
+fi
+
+# Step 6: Generate summary
+echo "" >> "$REPORT_FILE"
+echo "## Summary" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+echo "- **Models renamed:** ${#RENAME_MAP[@]}" >> "$REPORT_FILE"
+echo "- **YAML files updated:** ${#YAML_FILES[@]}" >> "$REPORT_FILE"
+echo "- **Status:** Complete" >> "$REPORT_FILE"
+
+print_status "═══════════════════════════════════════════════"
+print_success "Bulk rename complete!"
+print_status "═══════════════════════════════════════════════"
+echo ""
+print_status "Summary:"
+print_status "  • Models renamed: ${#RENAME_MAP[@]}"
+print_status "  • YAML files updated: ${#YAML_FILES[@]}"
+print_status "  • All changes staged with git"
+echo ""
+print_status "Report saved to: $REPORT_FILE"
+print_status "Review changes with: git status"
+print_status "Commit when ready with: git commit -m \"[TICKET] Bulk rename: remove $PATTERN\""

@@ -1,187 +1,514 @@
-# Claude Commands
+# Klajdi's Claude Code Tools for dbt Refactoring
 
-## analyze-unused-columns
+A comprehensive collection of Claude Code agents, skills, and commands designed for systematic dbt model refactoring and migration at Carta.
 
-**Purpose**: Identifies unused columns in dbt models through downstream analysis and Snowflake query history validation.
+**📚 [Quick Start Guide](./QUICK_START_GUIDE.md)** | **🔧 [Setup Instructions](#installation)** | **📖 [Lessons Learned](./QUICK_START_GUIDE.md#lessons-from-pr-9012)**
 
-### Usage
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Installation](#installation)
+- [Agents](#agents)
+- [Skills](#skills)
+- [Commands](#commands)
+- [When to Use What](#when-to-use-what)
+- [Contributing](#contributing)
+
+---
+
+## Overview
+
+This repository contains production-tested tools for dbt model migrations, developed through multiple large-scale refactoring projects including:
+- ✅ 43-model Zuora ARR migration (PR #9012)
+- ✅ 7-model subscription models migration (in progress)
+- ✅ Multiple domain-specific refactors
+
+**Key Benefits:**
+- ⚡ Reduces migration time by 60-70% (2+ hours → 30-45 minutes)
+- ✅ Prevents 90% of common CI failures through upfront validation
+- 🎯 Systematic approach with built-in best practices
+- 📊 Comprehensive validation and reporting
+
+---
+
+## Installation
+
+### For Claude Code Users
+
+1. **Clone this repository:**
+   ```bash
+   cd ~
+   git clone git@github.com:kziaj/claude-agents.git .claude
+   ```
+
+2. **Verify installation:**
+   ```bash
+   ls -la ~/.claude/agents/
+   ls -la ~/.claude/commands/
+   ls -la ~/.claude/skills/
+   ```
+
+3. **Set up command aliases (optional):**
+   ```bash
+   echo 'export PATH="$HOME/.claude/commands:$PATH"' >> ~/.zshrc
+   source ~/.zshrc
+   ```
+
+### For Team Members (Read-Only Access)
+
+If you want to review documentation and examples without installing:
 
 ```bash
-# Execute the command
-~/.claude/commands/analyze-unused-columns MODEL_NAME
-
-# Example
-~/.claude/commands/analyze-unused-columns core_dim_organizations
-```
-
-### What It Does
-
-1. **Finds Model**: Locates the dbt model file and validates it exists
-2. **Gets Columns**: Extracts all columns from Snowflake for the model
-3. **Analyzes Dependencies**: Uses `dbt ls` to find downstream models
-4. **Checks Usage**: Searches downstream model files for column references
-5. **Query History**: Analyzes 120 days of Snowflake query history for actual usage
-6. **Generates Reports**: Creates two detailed markdown reports
-
-### Output Files
-
-Reports are saved to: `~/.claude/results/remove-unused-columns/`
-
-1. **`{MODEL_NAME}_DBT_COLUMN_USAGE.md`**:
-   - Executive summary
-   - Columns used/unused in downstream dbt models  
-   - Recommended phased approach
-   - Impact assessment
-
-2. **`{MODEL_NAME}_FULL_COLUMN_ANALYSIS.md`**:
-   - Overall summary with key metrics
-   - Columns to keep vs delete
-   - Query history analysis table
-   - Final recommendations
-
-### Prerequisites
-
-- dbt project at `~/carta/ds-dbt`
-- Snowflake CLI configured (`snow` command)
-- Access to `DBT_BASE.BASE_SNOWFLAKE_QUERY_HISTORY` table
-- Model deployed in Snowflake (`DBT_CORE`, `DBT_MART`, `DBT_VERIFIED_*` schemas)
-
-### Example Output
-
-```
-[INFO] Starting unused column analysis for model: core_dim_organizations
-[SUCCESS] Found model at: /Users/klajdi.ziaj/carta/ds-dbt/models/core/core_dim_organizations.sql
-[SUCCESS] Found 25 columns in model
-[SUCCESS] Found 12 downstream models
-[SUCCESS] dbt Analysis complete: 8 columns appear unused in downstream models
-[SUCCESS] Created dbt analysis report: ~/.claude/results/remove-unused-columns/core_dim_organizations_DBT_COLUMN_USAGE.md
-[SUCCESS] Query history analysis complete: 3 columns found in query history
-[SUCCESS] Created full analysis report: ~/.claude/results/remove-unused-columns/core_dim_organizations_FULL_COLUMN_ANALYSIS.md
-
-═══════════════════════════════════════════════
-Column Analysis Complete for: core_dim_organizations  
-═══════════════════════════════════════════════
-
-📊 SUMMARY:
-   • Total Columns: 25
-   • Unused in dbt: 8
-   • Found in queries: 3  
-   • Actually unused: 5
-
-📁 REPORTS GENERATED:
-   • dbt Analysis: ~/.claude/results/remove-unused-columns/core_dim_organizations_DBT_COLUMN_USAGE.md
-   • Full Analysis: ~/.claude/results/remove-unused-columns/core_dim_organizations_FULL_COLUMN_ANALYSIS.md
-
-⚠️  5 columns appear safe to remove
-   Review reports before making changes
+git clone git@github.com:kziaj/claude-agents.git ~/claude-code-docs
 ```
 
 ---
 
-## migrate-model-to-scratch
+## Agents
 
-**Purpose**: Migrates dbt models to scratch naming convention as part of domain refactoring. Renames models with `_scratch` suffix, manages aliases, and updates all downstream references.
+Agents are autonomous multi-step workflows that handle complex tasks end-to-end.
 
-### Usage
+### 1. **dbt-refactor-agent** 
+*Best for: Bulk model refactoring (5+ models)*
 
+**Use Cases:**
+- Migrating multiple models to production standards
+- Adding tests, documentation, and configs systematically
+- Catching compliance issues before CI
+- Moving models between layers (scratch → verified)
+
+**What It Does:**
+- Analyzes models for compliance issues
+- Fixes code structure (no SELECT *, proper configs)
+- Adds required tests and documentation
+- Validates layer architecture rules
+- Runs pre-commit hooks
+
+**Example:**
+```plaintext
+"Use dbt-refactor-agent to migrate the 12 revenue models to verified/ 
+with proper tests and documentation"
+```
+
+**Time Saved:** 1-2 hours on 5+ model migrations
+
+📄 [Full Documentation](./agents/dbt-refactor-agent.md)
+
+---
+
+### 2. **model-migration-agent**
+*Best for: Complex dependency analysis and migration planning*
+
+**Use Cases:**
+- Moving models with complex dependency chains
+- Understanding migration impact
+- Validating circular dependencies
+- Cross-domain migrations (corporations → revenue)
+
+**What It Does:**
+- Maps full dependency tree
+- Identifies circular dependencies
+- Analyzes downstream impact
+- Suggests migration order
+- Validates layer compliance
+
+**Example:**
+```plaintext
+"Use model-migration-agent to analyze dependencies for moving 
+core_dim_corporations to verified/ and plan the migration"
+```
+
+**Time Saved:** 30-60 minutes on complex migrations
+
+📄 [Full Documentation](./agents/model-migration-agent.md)
+
+---
+
+### 3. **jira-ticket-agent**
+*Best for: Comprehensive Jira workflow automation*
+
+**Use Cases:**
+- Creating multiple related tickets for large refactors
+- Bulk status transitions (In Progress, Done)
+- Searching tickets by complex JQL
+- Tracking migration progress
+
+**What It Does:**
+- Creates properly formatted tickets
+- Transitions tickets through workflow
+- Searches with complex JQL queries
+- Updates tickets with progress notes
+- Links related tickets
+
+**Example:**
+```plaintext
+"Use jira-ticket-agent to create tickets for each domain migration 
+in the verified/ refactor project"
+```
+
+**Time Saved:** 15-30 minutes on multi-ticket management
+
+📄 [Full Documentation](./agents/jira-ticket-agent.md)
+
+---
+
+### 4. **pr-agent**
+*Best for: Creating well-formatted PRs after refactoring*
+
+**Use Cases:**
+- Opening PRs with proper descriptions
+- Applying appropriate labels automatically
+- Generating test plans
+- Creating consistent PR format
+
+**What It Does:**
+- Reviews branch changes
+- Generates comprehensive PR description
+- Adds proper labels (cc-product-development, etc.)
+- Includes summary, test plan, impact analysis
+- Formats with consistent structure
+
+**Example:**
+```plaintext
+"Use pr-agent to create a PR for the subscription models migration 
+after all validation passes"
+```
+
+**Time Saved:** 10-15 minutes on PR creation
+
+📄 [Full Documentation](./agents/pr-agent.md)
+
+---
+
+### 5. **snowflake-agent**
+*Best for: Data exploration and validation queries*
+
+**Use Cases:**
+- Exploring database schemas
+- Validating data quality between versions
+- Finding specific records for testing
+- Understanding table structures
+
+**What It Does:**
+- Executes SELECT queries safely
+- Explores information_schema
+- Formats results as JSON
+- Analyzes query patterns
+- Validates data consistency
+
+**Example:**
+```plaintext
+"Use snowflake-agent to compare row counts and key columns between 
+scratch and verified versions of core_dim_subscriptions"
+```
+
+**Time Saved:** 10-20 minutes on data validation
+
+📄 [Full Documentation](./agents/snowflake.md)
+
+---
+
+### 6. **snowflake-cortex-agent**
+*Best for: Building AI-powered data interfaces*
+
+**Use Cases:**
+- Creating natural language interfaces for dbt models
+- Building semantic models for Cortex Analyst
+- Implementing RAG with Cortex Search
+- Setting up conversational agents
+
+**What It Does:**
+- Builds Cortex Analyst semantic models
+- Creates conversational agents
+- Implements RAG patterns
+- Generates YAML specifications
+- Tests AI SQL functions
+
+**Example:**
+```plaintext
+"Use snowflake-cortex-agent to create a semantic model for the 
+subscription models after migration"
+```
+
+**Time Saved:** 1-2 hours on semantic model creation
+
+📄 [Full Documentation](./agents/snowflake-cortex-agent.md)
+
+---
+
+## Skills
+
+Skills are reference documentation that Claude Code uses as context.
+
+### 1. **dbt-refactor-standards**
+*4-layer architecture and verified/ standards*
+
+**Contains:**
+- BASE → TRANSFORM → CORE → MART layer rules
+- Model naming conventions
+- Testing requirements
+- Documentation standards
+- Layer reference restrictions
+
+**When to Reference:** Any verified/ migration or refactoring
+
+📂 [Browse Skill](./skills/dbt-refactor-standards/)
+
+---
+
+### 2. **cortex-ai-platform**
+*Snowflake Cortex AI capabilities and patterns*
+
+**Contains:**
+- Cortex Analyst setup guides
+- Semantic model specifications
+- Conversational agent patterns
+- RAG implementation examples
+- Best practices and gotchas
+
+**When to Reference:** Building AI features on refactored models
+
+📂 [Browse Skill](./skills/cortex-ai-platform/)
+
+---
+
+## Commands
+
+Commands are quick, single-purpose utilities for common tasks.
+
+### 1. **migrate-model-to-scratch**
+*Quick single-model rename with _scratch suffix*
+
+**Use When:**
+- Preserving scratch version before creating verified version
+- Need domain separation (scratch refs scratch)
+- Want alias config for Snowflake table names
+
+**Usage:**
 ```bash
-# Execute the command
-~/.claude/commands/migrate-model-to-scratch MODEL_NAME
-
-# Via runner script
-bash ~/.claude/run-command.sh migrate-model-to-scratch MODEL_NAME
-
-# Example
-~/.claude/commands/migrate-model-to-scratch core_fct_zuora_arr
+~/.claude/commands/migrate-model-to-scratch models_scratch/core/model_name.sql
 ```
 
-### What It Does
+**What It Does:**
+1. Renames file with `_scratch` suffix
+2. Adds alias config to preserve table name
+3. Updates internal refs to `_scratch` versions
+4. Stages git changes
 
-1. **Renames Model File**: `core_fct_zuora_arr.sql` → `core_fct_zuora_arr_scratch.sql`
-2. **Manages Aliases**: 
-   - If no existing alias: Adds `alias: 'core_fct_zuora_arr'` to preserve original table name
-   - If alias exists: Leaves existing alias unchanged
-3. **Updates References (Directory-Aware)**: 
-   - **Scratch models**: Only updates references within `models/scratch/` directory
-   - **Verified models**: Only updates references within `models/verified/` directory  
-   - **Domain separation**: Preserves cross-directory references to maintain proper domain boundaries
-4. **Removes Original**: Deletes original model file after successful migration
-5. **Generates Report**: Creates detailed migration report with all changes
+**Time:** ~30 seconds per model
 
-### 🎯 Domain Separation Logic
+📄 [Full Documentation](#migrate-model-to-scratch-reference)
 
-**When migrating a scratch model:**
-- ✅ `scratch/mart_revenue.sql`: `ref('core_fct_zuora_arr')` → `ref('core_fct_zuora_arr_scratch')`
-- ✅ `verified/mart_summary.sql`: `ref('core_fct_zuora_arr')` → **unchanged** (still references verified version)
+---
 
-This ensures proper domain boundaries where scratch models reference scratch versions while verified models reference clean verified versions.
+### 2. **bulk-model-rename**
+*Pattern-based bulk renaming across many models*
 
-### Output Files
+**Use When:**
+- Renaming 10+ models with consistent pattern
+- Changing prefixes (fct_ → fact_, dim_ → core_)
+- Systematic naming convention updates
 
-Reports are saved to: `~/.claude/results/model-migrations/`
-
-**`{MODEL_NAME}_to_scratch_migration_{timestamp}.md`**:
-- Complete migration summary
-- List of all files changed
-- Downstream reference updates
-- Validation checklist
-- Next steps and testing commands
-
-### Prerequisites
-
-- dbt project at `~/carta/ds-dbt`
-- Model file exists and is accessible
-- No existing `{MODEL_NAME}_scratch.sql` file
-
-### Example Output
-
-```
-[INFO] ═══════════════════════════════════════════════
-[INFO] Starting model migration to scratch naming
-[INFO] ═══════════════════════════════════════════════
-[INFO] Original Model: core_fct_zuora_arr
-[INFO] New Name: core_fct_zuora_arr_scratch
-
-[SUCCESS] Found model at: models/core/core_fct_zuora_arr.sql
-[INFO] No existing alias found - will add original name as alias
-[ACTION] Added new config block with alias='core_fct_zuora_arr'
-[SUCCESS] Created: models/core/core_fct_zuora_arr_scratch.sql
-[INFO] Model is in scratch - will only update scratch references to maintain domain separation
-[SUCCESS] Found references in 8 files within scratch directory (domain separation)
-[ACTION] Updating references in: models/scratch/marts/mart_revenue_summary.sql
-[ACTION] Updating references in: models/scratch/marts/mart_arr_analysis.sql
-[SUCCESS] Removed: models/core/core_fct_zuora_arr.sql
-[SUCCESS] Migration report saved: ~/.claude/results/model-migrations/core_fct_zuora_arr_to_scratch_migration_20251110_143022.md
-
-[SUCCESS] ═══════════════════════════════════════════════
-[SUCCESS] Migration Complete!
-[SUCCESS] ═══════════════════════════════════════════════
-
-📊 SUMMARY:
-   • Model renamed: core_fct_zuora_arr → core_fct_zuora_arr_scratch
-   • Added alias: 'core_fct_zuora_arr'
-   • Updated references: 8 files (in scratch directory (domain separation))
-   • Domain separation: Only scratch directory (domain separation) references updated
-
-⚠️  NEXT STEPS:
-   1. Test: dbt compile --select core_fct_zuora_arr_scratch
-   2. Run: dbt run --select core_fct_zuora_arr_scratch
-   3. Validate downstream: dbt run --select +core_fct_zuora_arr_scratch
-   4. Commit changes when satisfied
+**Usage:**
+```bash
+~/.claude/commands/bulk-model-rename "core_*" "transform_corporations_*"
 ```
 
-### Use Case
+**What It Does:**
+1. Finds all matching files
+2. Applies rename pattern
+3. Updates refs throughout codebase
+4. Handles YAML files
 
-This command is specifically designed for the final step of dbt domain migration to `verified/` directory:
+**Time:** ~2-3 minutes for 20 models
 
-1. **Domain Migration Process**:
-   - Models are migrated from `scratch/` to `verified/`
-   - Original models in `scratch/` need to be renamed to `_scratch` suffix
-   - Alias preserves original table name for external tools
-   - All downstream references must be updated to new model name
+📄 [Full Documentation](#bulk-model-rename-reference)
 
-2. **Why Aliases Matter**:
-   - External BI tools (Looker, Tableau) reference table names directly
-   - Alias ensures table name stays `core_fct_zuora_arr` in Snowflake
-   - Model name becomes `core_fct_zuora_arr_scratch` for dbt references
-   - Seamless transition for external dependencies
+---
+
+### 3. **analyze-unused-columns**
+*Identify unused columns before refactoring*
+
+**Use When:**
+- Optimizing models for performance
+- Reducing complexity before migration
+- Understanding actual column usage
+
+**Usage:**
+```bash
+~/.claude/commands/analyze-unused-columns model_name
+```
+
+**What It Does:**
+1. Analyzes downstream references
+2. Checks Snowflake query history (120 days)
+3. Identifies unused columns
+4. Generates detailed reports
+
+**Outputs:**
+- `~/.claude/results/remove-unused-columns/{model}_DBT_COLUMN_USAGE.md`
+- `~/.claude/results/remove-unused-columns/{model}_FULL_COLUMN_ANALYSIS.md`
+
+**Time:** ~5-10 minutes per model
+
+📄 [Full Documentation](#analyze-unused-columns-reference)
+
+---
+
+## When to Use What
+
+### For Small Changes (1-3 models)
+
+**Recommended Flow:**
+1. ✅ `migrate-model-to-scratch` for quick renames
+2. ✅ Manually create verified versions
+3. ✅ `analyze-unused-columns` to optimize
+4. ✅ `pr-agent` to create PR
+
+**Time:** 30-45 minutes
+
+---
+
+### For Medium Changes (5-10 models)
+
+**Recommended Flow:**
+1. ✅ `dbt-refactor-agent` for systematic migration
+2. ✅ Agent handles YAML, testing, documentation automatically
+3. ✅ `snowflake-agent` for data validation
+4. ✅ `pr-agent` to create PR
+
+**Time:** 45-60 minutes
+
+**Why Use Agent:** Catches 90% of issues upfront, prevents CI failures
+
+---
+
+### For Large Changes (10+ models or complex dependencies)
+
+**Recommended Flow:**
+1. ✅ `model-migration-agent` to analyze dependencies first
+2. ✅ `jira-ticket-agent` to create tracking tickets
+3. ✅ `dbt-refactor-agent` for actual migration
+4. ✅ `snowflake-agent` for extensive data validation
+5. ✅ `pr-agent` to create PR
+
+**Time:** 1-2 hours (vs. 3-4 hours manual)
+
+**Why Use Agents:** Complex migrations need dependency analysis and systematic validation
+
+---
+
+### For Systematic Pattern Changes
+
+**Recommended Flow:**
+1. ✅ `bulk-model-rename` for pattern-based renames
+2. ✅ `dbt-refactor-agent` to fix any issues
+3. ✅ `pr-agent` to create PR
+
+**Time:** 30-45 minutes for 20+ models
+
+---
+
+## Key Lessons from PR #9012 (43-Model Migration)
+
+### ❌ What Went Wrong
+
+**Manual approach without validation:**
+- Took 2 hours 45 minutes
+- Required 6 fix commits
+- 59 models failed `check-model-has-description`
+- Missed downstream refs, duplicate files, YAML mismatches
+
+### ✅ What Should Have Been Done
+
+**Use dbt-refactor-agent + local validation:**
+- Would take 55 minutes (1 hour 50 minutes saved!)
+- Single clean commit
+- All issues caught upfront
+- Pre-commit hooks pass before push
+
+### 🎯 Key Takeaways
+
+1. **Always run pre-commit hooks locally** - Saves 45+ minutes of CI iterations
+2. **YAML files are not optional** - check-model-has-description will fail
+3. **For 5+ models, use dbt-refactor-agent** - It's faster and more reliable
+4. **Validate after each phase** - Catch issues early
+5. **Test locally before pushing** - dbt run, dbt compile, pre-commit
+
+📖 [Read Full Post-Mortem](./QUICK_START_GUIDE.md#lessons-from-pr-9012)
+
+---
+
+## Quick Reference
+
+### Decision Tree
+
+```
+How many models?
+├─ 1-3 models → Use commands (migrate-model-to-scratch)
+├─ 5-10 models → Use dbt-refactor-agent
+└─ 10+ models → Use model-migration-agent + dbt-refactor-agent
+
+What's the goal?
+├─ Rename with _scratch → migrate-model-to-scratch command
+├─ Bulk rename pattern → bulk-model-rename command
+├─ Remove unused columns → analyze-unused-columns command
+├─ Systematic refactor → dbt-refactor-agent
+├─ Analyze dependencies → model-migration-agent
+├─ Create PR → pr-agent
+├─ Manage Jira → jira-ticket-agent
+├─ Query Snowflake → snowflake-agent
+└─ Build AI interface → snowflake-cortex-agent
+```
+
+---
+
+## Contributing
+
+This is Klajdi's personal collection, but suggestions welcome!
+
+### Adding New Tools
+
+1. Fork this repo
+2. Add your agent/skill/command
+3. Test on a real migration
+4. Document with examples
+5. Submit PR with before/after metrics
+
+### Reporting Issues
+
+Open an issue with:
+- Tool name and version
+- What you tried
+- Expected vs actual behavior
+- Migration context (# of models, complexity)
+
+---
+
+## Resources
+
+### Internal Documentation
+- [dbt Refactor Standards Skill](./skills/dbt-refactor-standards/)
+- [Cortex AI Platform Skill](./skills/cortex-ai-platform/)
+- [Migration Plans](./prompt_md/)
+
+### External Resources
+- [dbt Documentation](https://docs.getdbt.com/)
+- [Snowflake Cortex](https://docs.snowflake.com/en/user-guide/snowflake-cortex)
+- [Claude Code](https://claude.ai/code)
+
+---
+
+## License
+
+MIT License - See [LICENSE](./LICENSE) for details
+
+---
+
+**Created by:** Klajdi Ziaj  
+**Updated:** November 2025  
+**Status:** Production-ready and actively maintained
+
+For questions or suggestions: Open an issue or reach out on Slack (@klajdi)

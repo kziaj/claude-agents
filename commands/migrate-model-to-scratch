@@ -46,7 +46,8 @@ show_usage() {
     echo "  4. Finding downstream refs using both grep AND dbt list"
     echo "  5. Updating all downstream ref() calls in the same domain"
     echo "  6. Staging changes with git"
-    echo "  7. Generating migration report"
+    echo "  7. Compiling model to validate syntax and references"
+    echo "  8. Generating migration report"
     echo ""
     echo "Example:"
     echo "  migrate-model-to-scratch core_fct_zuora_arr"
@@ -322,6 +323,30 @@ fi
 
 print_success "All changes staged"
 
+# Step 7.5: Compile model to validate
+print_status "Step 7.5: Validating model compilation..."
+
+if command -v poetry &> /dev/null && [ -f "pyproject.toml" ]; then
+    # Try to compile the model
+    COMPILE_OUTPUT=$(poetry run dbt compile --select "$SCRATCH_MODEL_NAME" 2>&1)
+    COMPILE_EXIT_CODE=$?
+    
+    if [ $COMPILE_EXIT_CODE -eq 0 ]; then
+        print_success "✓ Model compiles successfully"
+        COMPILE_STATUS="✅ SUCCESS"
+    else
+        print_warning "⚠️  Compilation failed (this may be expected if dependent models aren't migrated yet)"
+        echo ""
+        echo "$COMPILE_OUTPUT" | grep -A 5 "Compilation Error" || echo "$COMPILE_OUTPUT" | tail -20
+        echo ""
+        print_status "You can continue - review the error to determine if it's expected"
+        COMPILE_STATUS="⚠️  FAILED (review error above)"
+    fi
+else
+    print_warning "Poetry/dbt not available - skipping compilation check"
+    COMPILE_STATUS="⊘ SKIPPED (poetry not available)"
+fi
+
 # Step 8: Generate migration report
 print_status "Step 8: Generating migration report..."
 
@@ -362,6 +387,11 @@ Instead of:
 
 ### Git Status
 All changes have been staged with git and are ready to commit.
+
+### Compilation Status
+$COMPILE_STATUS
+
+The model was automatically compiled after migration to validate syntax and references.
 
 ## Validation Commands
 
@@ -411,10 +441,10 @@ table remains $MODEL_NAME due to the alias configuration."
 
 ## Validation Checklist
 
+- [ ] Compilation status: $COMPILE_STATUS (already checked)
 - [ ] Grep and dbt list show no remaining refs to \`$MODEL_NAME\`
-- [ ] Model compiles successfully
-- [ ] Model runs without errors  
-- [ ] All downstream models compile and run
+- [ ] If compilation failed: dependent models migrated or error is expected
+- [ ] (Optional) Model runs without errors: \`dbt run -m $SCRATCH_MODEL_NAME --defer\`
 - [ ] Database table is still named \`$MODEL_NAME\` (check with SHOW TABLES)
 - [ ] Git diff looks correct (1 rename + config change + ref updates)
 - [ ] Ready to commit
@@ -455,14 +485,25 @@ if [ "$GREP_COUNT" -ne "$DBT_COUNT" ]; then
 fi
 
 echo ""
+print_status "✓ COMPILATION:"
+echo "   • Status: $COMPILE_STATUS"
+
+echo ""
 print_status "📁 REPORT:"
 echo "   • $REPORT_FILE"
 echo ""
 
 print_status "✅ NEXT STEPS:"
 echo "   1. Review: git diff --staged"
-echo "   2. Test: poetry run dbt run -m $SCRATCH_MODEL_NAME --defer --state artifacts/snowflake_prod_run"
-echo "   3. Verify: grep -r \"ref.*$MODEL_NAME\" models/ --include=\"*.sql\" | grep -v \"_scratch\""
-echo "   4. Commit when satisfied"
+echo "   2. Check compilation status above (already run)"
+if [ "$COMPILE_STATUS" = "✅ SUCCESS" ]; then
+    echo "   3. Test (optional): poetry run dbt run -m $SCRATCH_MODEL_NAME --defer --state artifacts/snowflake_prod_run"
+    echo "   4. Verify refs: grep -r \"ref.*$MODEL_NAME\" models/ --include=\"*.sql\" | grep -v \"_scratch\""
+    echo "   5. Commit when satisfied"
+else
+    echo "   3. If needed, migrate dependent models first"
+    echo "   4. Re-compile: poetry run dbt compile --select $SCRATCH_MODEL_NAME"
+    echo "   5. Commit when satisfied"
+fi
 
 exit 0

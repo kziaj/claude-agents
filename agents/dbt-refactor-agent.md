@@ -71,6 +71,7 @@ Inform the user immediately:
 Evaluate against standards:
 - [ ] Correct layer and naming convention?
 - [ ] _v2 suffix added (if migrating to verified/)?
+- [ ] **No SELECT * usage in model?** ← **Must use explicit column lists in verified/**
 - [ ] Primary key defined (if core/mart)?
 - [ ] Primary key tests present (unique + not_null)?
 - [ ] **unique_key tests present (if transform)?** ← **CI will fail without this**
@@ -79,6 +80,9 @@ Evaluate against standards:
 - [ ] Model description with grain and use case?
 - [ ] Layer flow rules followed (mart only refs core)?
 - [ ] Proper materialization (ephemeral for base, table otherwise)?
+- [ ] **All ref() calls point to existing models?**
+- [ ] **YAML model name matches SQL filename?**
+- [ ] **No orphaned YAML files (YAML without SQL)?**
 
 **Document Violations:**
 Create a clear list of what needs to be fixed.
@@ -94,6 +98,96 @@ If needed:
 - Fix layer boundary violations (e.g., mart referencing transform)
 - Optimize SQL structure (CTEs, readability)
 - Add inline comments for complex logic
+
+#### A.5. Replace SELECT * (CRITICAL for verified/)
+**For ANY model moving to verified/, you MUST replace all SELECT * with explicit columns:**
+
+1. **Identify SELECT * usage:**
+```bash
+grep -n "SELECT \*" models/models_verified/**/*.sql
+```
+
+2. **Get column list from upstream model:**
+   - Read the YAML schema for the upstream model
+   - Extract all column names from the `columns:` section
+   - If YAML doesn't exist, query the model in development:
+     ```sql
+     SELECT column_name 
+     FROM information_schema.columns 
+     WHERE table_name = 'MODEL_NAME' 
+     ORDER BY ordinal_position;
+     ```
+
+3. **Replace SELECT * with explicit columns:**
+```sql
+-- Before:
+SELECT *
+FROM {{ ref('upstream_model') }}
+WHERE condition
+
+-- After:
+SELECT
+    column_1
+    , column_2
+    , column_3
+    -- ... all columns explicitly listed
+FROM {{ ref('upstream_model') }}
+WHERE condition
+```
+
+4. **For multiple CTEs with SELECT *:**
+```sql
+-- Before:
+WITH cte_1 AS (
+  SELECT *
+  FROM {{ ref('model_a') }}
+),
+final AS (
+  SELECT *
+  FROM cte_1
+)
+SELECT * FROM final
+
+-- After:
+WITH cte_1 AS (
+  SELECT
+      col_1
+      , col_2
+      , col_3
+  FROM {{ ref('model_a') }}
+),
+final AS (
+  SELECT
+      col_1
+      , col_2
+      , col_3
+  FROM cte_1
+)
+SELECT
+    col_1
+    , col_2
+    , col_3
+FROM final
+```
+
+**Why This Matters:**
+- Prevents downstream breaks when upstream schemas change
+- Self-documents what columns are actually used
+- Improves query performance (no unnecessary columns)
+- Required for production standards in verified/
+
+**IMPORTANT:** If the model has transformations (calculated fields), include those AFTER the base columns:
+```sql
+SELECT
+    -- Base columns from upstream
+    col_1
+    , col_2
+    , col_3
+    -- Calculated/transformed columns
+    , {{ dbt_utils.generate_surrogate_key(['col_1', 'col_2']) }} AS _pk
+    , CASE WHEN col_3 > 0 THEN 'active' ELSE 'inactive' END AS status
+FROM {{ ref('upstream_model') }}
+```
 
 #### B. Update Schema YAML
 **For Core & Mart models**, ensure schema.yml has:
@@ -385,17 +479,50 @@ Search for similar models: `find ~/carta/ds-dbt/models -name "*partial_name*"`
 
 Before finalizing:
 - [ ] **CRITICAL**: Verified model is NOT incremental/snapshot (or backfill completed by Data Engineering)
+- [ ] **No SELECT * usage** - all columns explicitly listed
+- [ ] **No version suffixes (_v2, _v3)** in production model names (only during migration)
+- [ ] **All ref() calls validated** - every referenced model exists
+- [ ] **YAML/SQL names match** - no orphaned YAML files
 - [ ] All models compile successfully
 - [ ] All required tests pass
 - [ ] All columns documented
 - [ ] cluster_by added to core/mart configs
 - [ ] Layer flow rules validated
 - [ ] Naming conventions followed
-- [ ] _v2 suffix added to all verified/ models
+- [ ] _v2 suffix added to all verified/ models (during migration only)
 - [ ] All refs updated to use _v2 names where needed
 - [ ] Git commit created with clear message
 - [ ] PR created (if requested)
 - [ ] Slack notification copied (if PR created)
+
+### Automated Validation Commands
+
+Run these before finalizing PR:
+
+```bash
+# 1. Check for SELECT * in verified models
+grep -r "SELECT \*" models/models_verified/ --include="*.sql"
+# Expected: No results
+
+# 2. Check for version suffixes in production
+find models/models_verified/ -name "*_v[0-9]*.sql"
+# Expected: Only during migration, remove before final PR
+
+# 3. Check for orphaned YAML files
+find models/models_verified/ -name "*.yml" -exec grep -H "  - name:" {} \; | \
+  sed 's/:  - name: / /' | \
+  while read yaml model; do
+    dir=$(dirname "$yaml")
+    [ ! -f "${dir}/${model}.sql" ] && echo "⚠️  Orphaned: $model in $yaml"
+  done
+# Expected: No output
+
+# 4. Validate all models compile
+cd ~/ds-redshift || cd ~/carta/ds-dbt
+source .env
+poetry run dbt compile --select models/models_verified/
+# Expected: All models compile without errors
+```
 
 ## Reference Documentation
 
