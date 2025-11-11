@@ -513,3 +513,206 @@ All upstream models compared between scratch and verified:
 8. **Modular Decomposition:** 5 focused models (92-580 lines) > 1 monolith (1144 lines)
 9. **Variant Pattern:** Support multiple calculation variants (main, without_overrides, finance_official) in parallel
 10. **Core Simplification:** Core buckets model just combines variants - no complex logic
+
+---
+
+## Scratch Models Migration to _scratch Naming Convention (Session 4)
+
+**Date:** November 10, 2025  
+**Related PRs:**
+- Verified Migration: [#9003](https://github.com/carta/ds-dbt/pull/9003) - Migrate to verified/ (9 models)
+- Scratch Migration: [#9012](https://github.com/carta/ds-dbt/pull/9012) - Add _scratch suffix to replaced models (43 models)
+
+### Context & Motivation
+
+After completing the verified migration (PR #9003), the original scratch models needed to be renamed with `_scratch` suffix to:
+1. Clearly distinguish deprecated models from new verified versions
+2. Prevent confusion about which models are being replaced
+3. Maintain database table names unchanged using dbt `alias` configuration
+4. Allow gradual deprecation of old models after verified versions are validated
+
+### Migration Scope
+
+**Total Models Migrated:** 43 models across 4 layers  
+**Branch:** `th/zuora-arr-migration/migrate-to-scratch-naming`  
+**Files Changed:** 109 (43 model renames + 66 downstream reference updates)
+
+#### Base Layer (12 models)
+All Zuora and Google Sheets base models that feed the ARR pipeline:
+
+1. `base_google_sheets_ccl_sfdc_mapping` → `base_google_sheets_ccl_sfdc_mapping_scratch`
+2. `base_zuora_account` → `base_zuora_account_scratch`
+3. `base_zuora_amendment` → `base_zuora_amendment_scratch`
+4. `base_zuora_invoice` → `base_zuora_invoice_scratch`
+5. `base_zuora_invoice_item` → `base_zuora_invoice_item_scratch`
+6. `base_zuora_order` → `base_zuora_order_scratch`
+7. `base_zuora_order_action` → `base_zuora_order_action_scratch`
+8. `base_zuora_product` → `base_zuora_product_scratch`
+9. `base_zuora_rate_plan` → `base_zuora_rate_plan_scratch`
+10. `base_zuora_rate_plan_charge` → `base_zuora_rate_plan_charge_scratch`
+11. `base_zuora_rate_plan_charge_tier` → `base_zuora_rate_plan_charge_tier_scratch`
+12. `base_zuora_subscription` → `base_zuora_subscription_scratch`
+
+**Updated:** 9 downstream files (core models referencing base)
+
+#### Core/Transform Layer (9 models)
+Banking, finance, and Zuora core models that were replaced by verified equivalents:
+
+13. `core_ccl_account_history` → `core_ccl_account_history_scratch`
+14. `core_ccl_account_history_windows` → `core_ccl_account_history_windows_scratch`
+15. `core_finance_arr_official` → `core_finance_arr_official_scratch`
+16. `core_dim_zuora_accounts__mark_dupes` → `core_dim_zuora_accounts__mark_dupes_scratch`
+17. `core_dim_zuora_contract_subscriptions` → `core_dim_zuora_contract_subscriptions_scratch`
+18. `core_fct_zuora_arr` → `core_fct_zuora_arr_scratch`
+19. `core_fct_zuora_arr_buckets` → `core_fct_zuora_arr_buckets_scratch`
+20. `core_dim_zuora_subscriptions` → `core_dim_zuora_subscriptions_scratch`
+21. `mart_fct_revenue_arr_bucket_investor_services` → `mart_fct_revenue_arr_bucket_investor_services_scratch`
+
+**Updated:** 35 downstream files (mart and intermediate models)
+
+#### Intermediate ARR Models (22 models)
+All 3 ARR bucketing variant pipelines that feed into the consolidated buckets model:
+
+**arr_final/ subdirectory (8 models):**
+22. `core_fct_zuora_arr_buckets__1based` → `core_fct_zuora_arr_buckets__1based_scratch`
+23. `core_fct_zuora_arr_buckets__2churned` → `core_fct_zuora_arr_buckets__2churned_scratch`
+24. `core_fct_zuora_arr_buckets__3delta` → `core_fct_zuora_arr_buckets__3delta_scratch`
+25. `core_fct_zuora_arr_buckets__4expansion` → `core_fct_zuora_arr_buckets__4expansion_scratch`
+26. `core_fct_zuora_arr_buckets__5unioned` → `core_fct_zuora_arr_buckets__5unioned_scratch`
+27. `core_fct_zuora_arr_buckets__6dates_exploded` → `core_fct_zuora_arr_buckets__6dates_exploded_scratch`
+28. `core_fct_zuora_arr_buckets__7bucketed_month_to_date` → `core_fct_zuora_arr_buckets__7bucketed_month_to_date_scratch`
+29. `core_fct_zuora_arr_buckets__8bucketed_time_to_date` → `core_fct_zuora_arr_buckets__8bucketed_time_to_date_scratch`
+
+**without_overrides/ subdirectory (7 models):**
+30. `core_fct_zuora_arr_buckets__1a_based_without_overrides` → `core_fct_zuora_arr_buckets__1a_based_without_overrides_scratch`
+31. `core_fct_zuora_arr_buckets__2a_churned_without_overrides` → `core_fct_zuora_arr_buckets__2a_churned_without_overrides_scratch`
+32. `core_fct_zuora_arr_buckets__3a_delta_without_overrides` → `core_fct_zuora_arr_buckets__3a_delta_without_overrides_scratch`
+33. `core_fct_zuora_arr_buckets__4a_expansion_without_overrides` → `core_fct_zuora_arr_buckets__4a_expansion_without_overrides_scratch`
+34. `core_fct_zuora_arr_buckets__5a_unioned_without_overrides` → `core_fct_zuora_arr_buckets__5a_unioned_without_overrides_scratch`
+35. `core_fct_zuora_arr_buckets__7a_bucketed_month_to_date_without_overrides` → `core_fct_zuora_arr_buckets__7a_bucketed_month_to_date_without_overrides_scratch`
+36. `core_fct_zuora_arr_buckets__8a_bucketed_time_to_date_without_overrides` → `core_fct_zuora_arr_buckets__8a_bucketed_time_to_date_without_overrides_scratch`
+
+**finance_official/ subdirectory (7 models):**
+37. `core_fct_zuora_arr_buckets__1b_based_finance` → `core_fct_zuora_arr_buckets__1b_based_finance_scratch`
+38. `core_fct_zuora_arr_buckets__2b_churned_finance` → `core_fct_zuora_arr_buckets__2b_churned_finance_scratch`
+39. `core_fct_zuora_arr_buckets__3b_delta_finance` → `core_fct_zuora_arr_buckets__3b_delta_finance_scratch`
+40. `core_fct_zuora_arr_buckets__4b_expansion_finance` → `core_fct_zuora_arr_buckets__4b_expansion_finance_scratch`
+41. `core_fct_zuora_arr_buckets__5b_unioned_finance` → `core_fct_zuora_arr_buckets__5b_unioned_finance_scratch`
+42. `core_fct_zuora_arr_buckets__7b_bucketed_month_to_date_finance` → `core_fct_zuora_arr_buckets__7b_bucketed_month_to_date_finance_scratch`
+43. `core_fct_zuora_arr_buckets__8b_bucketed_time_to_date_finance` → `core_fct_zuora_arr_buckets__8b_bucketed_time_to_date_finance_scratch`
+
+**Updated:** 22 internal references between intermediate models
+
+### Migration Tool
+
+Used custom bash script: `~/.claude/commands/migrate-model-to-scratch`
+
+**Script Features:**
+- Renames model file using `git mv` (preserves history)
+- Adds `alias='original_name'` config to preserve database table names
+- Finds downstream references using dual verification:
+  - `grep` for text search across models/
+  - `dbt list` for actual DAG dependencies
+- Updates all `ref()` calls in models_scratch/ scope only
+- Stages all changes with git
+- Generates detailed migration report per model
+
+**Example Output:**
+```
+Model renamed: base_zuora_account → base_zuora_account_scratch
+Added alias: 'base_zuora_account' (table name preserved)
+Updated references: 9 files (in models_scratch directory)
+```
+
+### Database Impact
+
+**Zero database impact** - All table names remain unchanged via dbt alias configuration:
+
+```sql
+{{ config(
+    alias='base_zuora_account'
+) }}
+```
+
+- Model file: `base_zuora_account_scratch.sql`
+- Database table: `base_zuora_account` (unchanged)
+- External tools (Looker, etc.): Continue working without changes
+
+### Validation
+
+**Downstream Reference Verification:**
+- All 66 downstream models updated correctly
+- No remaining unmigrated `ref()` calls (verified via grep)
+- All references scoped to models_scratch/ only (verified/ not affected)
+
+**Manual Fix Required:**
+- 1 reference to `core_fct_zuora_arr_buckets__8bucketed_time_to_date` missed by script
+- Fixed manually in `core_fct_zuora_arr_buckets_scratch.sql` line 48
+
+### PR Cleanup
+
+**Issue:** Initial PR #9012 was created from branch containing both verified migration commits and scratch migration commit, showing all changes together.
+
+**Fix:** Rebased scratch migration to clean state:
+```bash
+# Create clean branch from main
+git checkout -b temp-scratch-only origin/main
+
+# Cherry-pick only scratch migration commit
+git cherry-pick b2b2b6821
+
+# Replace old branch
+git branch -D th/zuora-arr-migration/migrate-to-scratch-naming
+git branch -m temp-scratch-only th/zuora-arr-migration/migrate-to-scratch-naming
+
+# Force push to update PR
+git push -f origin th/zuora-arr-migration/migrate-to-scratch-naming
+```
+
+**Result:** PR #9012 now shows only scratch migration changes (1 commit, 67 files) based on `main` branch.
+
+### Key Learnings
+
+1. **Dual Verification Essential:** Grep and dbt list often show discrepancies - grep more reliable for find/replace
+2. **Scope Isolation:** Only update references within same directory (models_scratch) to avoid breaking verified/
+3. **Alias Pattern:** Using `alias` config enables safe renaming without downstream impact
+4. **Batch Processing:** Can migrate models in batches using loops, but verify each completion
+5. **Git Preservation:** Using `git mv` preserves file history for deprecated models
+
+### Next Steps
+
+1. **Merge both PRs:**
+   - PR #9003: Verified migration (9 new models)
+   - PR #9012: Scratch naming (43 renamed models)
+
+2. **Deprecation Timeline:**
+   - Week 1-2: Monitor verified models in production
+   - Week 3-4: Update downstream consumers to use _v2 models
+   - Week 5+: Drop _scratch models after full migration
+
+3. **Documentation:**
+   - Update Looker explores to point to new verified tables
+   - Notify stakeholders of deprecated model names
+   - Add deprecation warnings to _scratch model YAML files
+
+---
+
+## Session 4 Summary
+
+**Completed:** November 10, 2025 (Evening)
+
+Successfully migrated all 43 Zuora ARR scratch models to `_scratch` naming convention in preparation for verified/ migration validation and eventual deprecation.
+
+**Key Achievements:**
+- ✅ 43 models renamed with `_scratch` suffix across 4 layers
+- ✅ 66 downstream references updated automatically
+- ✅ Zero database impact (alias config preserves table names)
+- ✅ Git history preserved via `git mv`
+- ✅ PR #9012 created and cleaned (based on main, not verified branch)
+- ✅ Documentation updated with complete migration audit trail
+
+**Final Status:**
+- **PR #9003:** Verified migration (9 new models) - Ready for review
+- **PR #9012:** Scratch naming (43 renamed models) - Ready for review
+
+Both PRs are independent and can be merged in any order. Database tables remain unchanged during scratch migration due to dbt alias configuration.
