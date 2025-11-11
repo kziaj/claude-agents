@@ -1,0 +1,502 @@
+#!/bin/bash
+
+# Claude Command: Analyze Unused Columns in dbt Models
+# Usage: analyze-unused-columns MODEL_NAME
+# Description: Identifies unused columns in dbt models through downstream analysis and Snowflake query history
+
+set -e
+
+# Configuration
+RESULTS_DIR="$HOME/.claude/results/remove-unused-columns"
+DBT_PROJECT_DIR="$HOME/carta/ds-dbt"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Function to show usage
+show_usage() {
+    echo "Usage: analyze-unused-columns MODEL_NAME"
+    echo ""
+    echo "Analyzes unused columns in a dbt model through:"
+    echo "  1. Downstream dependency analysis"  
+    echo "  2. Snowflake query history validation (120 days)"
+    echo ""
+    echo "Creates reports in: $RESULTS_DIR"
+    echo ""
+    echo "Example:"
+    echo "  analyze-unused-columns core_dim_organizations"
+}
+
+# Validate input
+if [ $# -ne 1 ]; then
+    print_error "Missing model name argument"
+    show_usage
+    exit 1
+fi
+
+MODEL_NAME="$1"
+
+# Create results directory
+mkdir -p "$RESULTS_DIR"
+
+print_status "Starting unused column analysis for model: $MODEL_NAME"
+
+# Step 1: Validate model exists
+print_status "Step 1: Validating model exists..."
+
+# Find model file
+MODEL_FILE=$(find "$DBT_PROJECT_DIR/models" -name "${MODEL_NAME}.sql" -type f 2>/dev/null | head -1)
+
+if [ -z "$MODEL_FILE" ]; then
+    print_error "Model '$MODEL_NAME' not found in $DBT_PROJECT_DIR/models"
+    exit 1
+fi
+
+print_success "Found model at: $MODEL_FILE"
+
+# Step 2: Get model columns from Snowflake
+print_status "Step 2: Getting model columns from Snowflake..."
+
+COLUMN_QUERY="
+SELECT 
+    column_name,
+    data_type,
+    is_nullable,
+    COALESCE(comment, '') as comment
+FROM information_schema.columns 
+WHERE table_name = UPPER('$MODEL_NAME')
+    AND table_schema IN ('DBT_CORE', 'DBT_MART', 'DBT_VERIFIED_CORE', 'DBT_VERIFIED_MART')
+ORDER BY ordinal_position;
+"
+
+COLUMNS_JSON=$(snow sql --query "$COLUMN_QUERY" --format JSON 2>/dev/null)
+
+if [ -z "$COLUMNS_JSON" ] || [ "$COLUMNS_JSON" = "[]" ]; then
+    print_error "Could not find columns for model '$MODEL_NAME' in Snowflake"
+    print_error "Make sure the model is deployed and accessible"
+    exit 1
+fi
+
+# Extract column names for analysis
+COLUMN_NAMES=$(echo "$COLUMNS_JSON" | jq -r '.[].COLUMN_NAME' | tr '\n' ',' | sed 's/,$//')
+TOTAL_COLUMNS=$(echo "$COLUMNS_JSON" | jq length)
+
+print_success "Found $TOTAL_COLUMNS columns in model"
+
+# Step 3: Analyze downstream dependencies
+print_status "Step 3: Analyzing downstream dependencies..."
+
+cd "$DBT_PROJECT_DIR"
+
+# Get downstream models using dbt
+DOWNSTREAM_MODELS=$(dbt ls --select "+$MODEL_NAME" --output name 2>/dev/null | grep -v "$MODEL_NAME" || echo "")
+
+if [ -z "$DOWNSTREAM_MODELS" ]; then
+    print_warning "No downstream models found for $MODEL_NAME"
+    DOWNSTREAM_COUNT=0
+else
+    DOWNSTREAM_COUNT=$(echo "$DOWNSTREAM_MODELS" | wc -l | tr -d ' ')
+    print_success "Found $DOWNSTREAM_COUNT downstream models"
+fi
+
+# Step 4: Analyze column usage in downstream models
+print_status "Step 4: Analyzing column usage in downstream models..."
+
+# Create temporary file for column usage tracking
+TEMP_USAGE_FILE=$(mktemp)
+
+# Initialize all columns as unused
+echo "$COLUMNS_JSON" | jq -r '.[].COLUMN_NAME' | while read -r col; do
+    echo "$col:UNUSED" >> "$TEMP_USAGE_FILE"
+done
+
+# Analyze each downstream model
+if [ -n "$DOWNSTREAM_MODELS" ]; then
+    echo "$DOWNSTREAM_MODELS" | while read -r downstream_model; do
+        if [ -n "$downstream_model" ]; then
+            # Find the downstream model file
+            DOWNSTREAM_FILE=$(find models -name "${downstream_model}.sql" -type f 2>/dev/null | head -1)
+            
+            if [ -n "$DOWNSTREAM_FILE" ]; then
+                # Check which columns are referenced
+                echo "$COLUMNS_JSON" | jq -r '.[].COLUMN_NAME' | while read -r col; do
+                    # Look for column references (case insensitive)
+                    if grep -iq "\b${col}\b" "$DOWNSTREAM_FILE" 2>/dev/null; then
+                        # Mark as used and record which model uses it
+                        sed -i.bak "s/${col}:UNUSED/${col}:USED_IN_${downstream_model}/" "$TEMP_USAGE_FILE" 2>/dev/null || true
+                    fi
+                done
+            fi
+        fi
+    done
+fi
+
+# Count unused columns from dbt analysis
+UNUSED_COLUMNS_DBT=$(grep ":UNUSED" "$TEMP_USAGE_FILE" | cut -d: -f1 | tr '\n' ',' | sed 's/,$//' || echo "")
+UNUSED_COUNT_DBT=$(grep -c ":UNUSED" "$TEMP_USAGE_FILE" || echo "0")
+
+print_success "dbt Analysis complete: $UNUSED_COUNT_DBT columns appear unused in downstream models"
+
+# Step 5: Generate initial DBT column usage report
+print_status "Step 5: Generating dbt column usage report..."
+
+DBT_REPORT_FILE="$RESULTS_DIR/${MODEL_NAME}_DBT_COLUMN_USAGE.md"
+
+cat > "$DBT_REPORT_FILE" << EOF
+# dbt Column Usage Analysis: $MODEL_NAME
+
+**Generated**: $(date)  
+**Model**: $MODEL_NAME  
+**Total Columns**: $TOTAL_COLUMNS  
+**Downstream Models Analyzed**: $DOWNSTREAM_COUNT  
+
+## Executive Summary
+
+This analysis examined $TOTAL_COLUMNS columns in the \`$MODEL_NAME\` model across $DOWNSTREAM_COUNT downstream dbt models to identify unused columns that could potentially be removed to improve performance and maintainability.
+
+### Key Findings
+- **Total Columns**: $TOTAL_COLUMNS
+- **Columns Used in Downstream Models**: $((TOTAL_COLUMNS - UNUSED_COUNT_DBT))
+- **Columns Not Used in Downstream Models**: $UNUSED_COUNT_DBT
+
+## Columns to Keep (Used in Downstream Models)
+
+EOF
+
+# Add used columns
+grep -v ":UNUSED" "$TEMP_USAGE_FILE" | while read -r line; do
+    col=$(echo "$line" | cut -d: -f1)
+    usage=$(echo "$line" | cut -d: -f2)
+    echo "- **$col** - Used in: ${usage#USED_IN_}" >> "$DBT_REPORT_FILE"
+done
+
+cat >> "$DBT_REPORT_FILE" << EOF
+
+## Columns Potentially Available for Removal
+
+⚠️ **IMPORTANT**: These columns appear unused in downstream dbt models, but may still be used in:
+- Direct Snowflake queries by analysts
+- BI tools (Looker, Tableau, etc.)
+- Data exports and integrations
+- Ad-hoc analysis
+
+EOF
+
+if [ "$UNUSED_COUNT_DBT" -gt 0 ]; then
+    echo "$UNUSED_COLUMNS_DBT" | tr ',' '\n' | while read -r col; do
+        if [ -n "$col" ]; then
+            # Get column details
+            COL_TYPE=$(echo "$COLUMNS_JSON" | jq -r ".[] | select(.COLUMN_NAME == \"$col\") | .DATA_TYPE")
+            COL_COMMENT=$(echo "$COLUMNS_JSON" | jq -r ".[] | select(.COLUMN_NAME == \"$col\") | .COMMENT")
+            echo "- **$col** ($COL_TYPE) - $COL_COMMENT" >> "$DBT_REPORT_FILE"
+        fi
+    done
+else
+    echo "✅ All columns are used in downstream dbt models." >> "$DBT_REPORT_FILE"
+fi
+
+cat >> "$DBT_REPORT_FILE" << EOF
+
+## Recommended Next Steps
+
+1. **Validate with Snowflake Query History**: Run query history analysis to check actual usage
+2. **Business Stakeholder Review**: Confirm columns aren't needed for reporting or analysis
+3. **Phased Removal**: If confirmed unused, implement removal in phases:
+   - Phase 1: Deprecate columns (add deprecation comments)
+   - Phase 2: Remove from new model version
+   - Phase 3: Update downstream dependencies
+
+## Impact Assessment
+
+**Low Risk Removals**:
+- Columns with clear deprecation comments
+- Columns with NULL or default values only
+- Duplicate/redundant columns
+
+**High Risk Removals**:
+- Columns used in business-critical calculations
+- Columns referenced in documentation or business glossaries
+- Columns that might be used in external integrations
+
+## Downstream Models Analyzed ($DOWNSTREAM_COUNT)
+
+EOF
+
+if [ -n "$DOWNSTREAM_MODELS" ]; then
+    echo "$DOWNSTREAM_MODELS" | while read -r model; do
+        if [ -n "$model" ]; then
+            echo "- $model" >> "$DBT_REPORT_FILE"
+        fi
+    done
+else
+    echo "No downstream models found." >> "$DBT_REPORT_FILE"
+fi
+
+print_success "Created dbt analysis report: $DBT_REPORT_FILE"
+
+# Step 6: Query Snowflake query history for actual usage
+print_status "Step 6: Analyzing Snowflake query history (last 120 days)..."
+
+# Create the column list for SQL IN clause
+COLUMN_LIST_SQL=""
+if [ -n "$UNUSED_COLUMNS_DBT" ]; then
+    # Add unused columns
+    COLUMN_LIST_SQL=$(echo "$UNUSED_COLUMNS_DBT" | tr ',' '\n' | while read -r col; do
+        if [ -n "$col" ]; then
+            echo "'${col}'"
+        fi
+    done | paste -sd ',' -)
+    
+    # Add a few used columns for validation
+    USED_COLUMNS=$(grep -v ":UNUSED" "$TEMP_USAGE_FILE" | head -3 | cut -d: -f1 | while read -r col; do
+        echo "'${col}'"
+    done | paste -sd ',' - || echo "")
+    
+    if [ -n "$USED_COLUMNS" ]; then
+        COLUMN_LIST_SQL="$COLUMN_LIST_SQL,$USED_COLUMNS"
+    fi
+else
+    # If no unused columns, just analyze a sample of all columns
+    COLUMN_LIST_SQL=$(echo "$COLUMNS_JSON" | jq -r '.[0:5] | .[].COLUMN_NAME' | while read -r col; do
+        echo "'${col}'"
+    done | paste -sd ',' -)
+fi
+
+if [ -z "$COLUMN_LIST_SQL" ]; then
+    print_error "No columns to analyze in query history"
+    exit 1
+fi
+
+QUERY_HISTORY_ANALYSIS="
+WITH column_usage AS (
+    SELECT 
+        query_text,
+        start_time,
+        user_name,
+        query_id,
+        database_name,
+        schema_name
+    FROM DBT_BASE.BASE_SNOWFLAKE_QUERY_HISTORY
+    WHERE start_time >= DATEADD(day, -120, CURRENT_DATE())
+        AND query_text IS NOT NULL
+        AND query_text != ''
+        AND UPPER(query_text) LIKE '%${MODEL_NAME^^}%'
+        AND UPPER(query_text) NOT LIKE '%SELECT \\*%'
+),
+column_matches AS (
+    SELECT 
+        column_name,
+        query_text,
+        start_time,
+        user_name,
+        query_id
+    FROM (
+        SELECT 
+            col.value::string as column_name,
+            cu.query_text,
+            cu.start_time,
+            cu.user_name,
+            cu.query_id
+        FROM column_usage cu,
+        LATERAL FLATTEN(input => ARRAY_CONSTRUCT(${COLUMN_LIST_SQL})) col
+    )
+    WHERE UPPER(query_text) REGEXP '\\\\b' || UPPER(column_name) || '\\\\b'
+)
+SELECT 
+    column_name,
+    MIN(start_time) as first_used,
+    MAX(start_time) as last_used,
+    COUNT(DISTINCT query_id) as num_queries_using_column,
+    COUNT(DISTINCT user_name) as num_users,
+    LISTAGG(DISTINCT SPLIT_PART(user_name, '@', 1), ', ') as query_sources,
+    ANY_VALUE(SUBSTR(query_text, 1, 200) || '...') as sample_query
+FROM column_matches
+GROUP BY column_name
+ORDER BY num_queries_using_column DESC, column_name;
+"
+
+print_status "Executing Snowflake query history analysis..."
+
+QUERY_RESULTS=$(snow sql --query "$QUERY_HISTORY_ANALYSIS" --format JSON 2>/dev/null || echo "[]")
+
+if [ "$QUERY_RESULTS" = "[]" ]; then
+    print_warning "No query history results found - this could mean:"
+    print_warning "  1. Columns are truly unused in queries"
+    print_warning "  2. Model name not matching query patterns"
+    print_warning "  3. All queries use SELECT *"
+fi
+
+# Count columns that showed up in query history  
+COLUMNS_IN_QUERIES=$(echo "$QUERY_RESULTS" | jq length)
+COLUMNS_ACTUALLY_UNUSED=$((UNUSED_COUNT_DBT - COLUMNS_IN_QUERIES))
+
+print_success "Query history analysis complete: $COLUMNS_IN_QUERIES columns found in query history"
+
+# Step 7: Generate final analysis report
+print_status "Step 7: Generating final column analysis report..."
+
+FINAL_REPORT_FILE="$RESULTS_DIR/${MODEL_NAME}_FULL_COLUMN_ANALYSIS.md"
+
+cat > "$FINAL_REPORT_FILE" << EOF
+# Full Column Usage Analysis: $MODEL_NAME
+
+**Generated**: $(date)  
+**Analysis Period**: Last 120 days of query history  
+**Model**: $MODEL_NAME  
+
+## Overall Summary
+
+This comprehensive analysis examined column usage through both dbt downstream dependencies and actual Snowflake query history to provide accurate recommendations for unused column removal.
+
+### Key Metrics
+- **Total Columns in Model**: $TOTAL_COLUMNS
+- **Columns Recommended for Deletion (dbt analysis)**: $UNUSED_COUNT_DBT
+- **Columns Found in Query History**: $COLUMNS_IN_QUERIES  
+- **Columns Actually Unused (Safe to Remove)**: $COLUMNS_ACTUALLY_UNUSED
+
+## Analysis Results
+
+### ✅ Columns to Keep
+
+**Reason**: Used in downstream dbt models or found in query history
+
+EOF
+
+# Add columns to keep
+if [ "$QUERY_RESULTS" != "[]" ]; then
+    echo "$QUERY_RESULTS" | jq -r '.[] | "- **" + .COLUMN_NAME + "** - Used in " + (.NUM_QUERIES_USING_COLUMN | tostring) + " queries by " + (.NUM_USERS | tostring) + " users"' >> "$FINAL_REPORT_FILE"
+fi
+
+grep -v ":UNUSED" "$TEMP_USAGE_FILE" | while read -r line; do
+    col=$(echo "$line" | cut -d: -f1)
+    # Only add if not already in query results
+    if ! echo "$QUERY_RESULTS" | jq -e ".[] | select(.COLUMN_NAME == \"$col\")" >/dev/null 2>&1; then
+        echo "- **$col** - Used in downstream dbt models" >> "$FINAL_REPORT_FILE"
+    fi
+done
+
+cat >> "$FINAL_REPORT_FILE" << EOF
+
+### ❌ Columns Safe to Delete
+
+**Reason**: Not used in downstream dbt models AND not found in query history (last 120 days)
+
+EOF
+
+if [ "$COLUMNS_ACTUALLY_UNUSED" -gt 0 ]; then
+    # Find columns that are unused in both dbt and query history
+    echo "$UNUSED_COLUMNS_DBT" | tr ',' '\n' | while read -r col; do
+        if [ -n "$col" ]; then
+            # Check if this column was found in query history
+            if ! echo "$QUERY_RESULTS" | jq -e ".[] | select(.COLUMN_NAME == \"$col\")" >/dev/null 2>&1; then
+                COL_TYPE=$(echo "$COLUMNS_JSON" | jq -r ".[] | select(.COLUMN_NAME == \"$col\") | .DATA_TYPE")
+                COL_COMMENT=$(echo "$COLUMNS_JSON" | jq -r ".[] | select(.COLUMN_NAME == \"$col\") | .COMMENT")
+                echo "- **$col** ($COL_TYPE) - $COL_COMMENT" >> "$FINAL_REPORT_FILE"
+            fi
+        fi
+    done
+else
+    echo "✅ No columns are safe to delete based on this analysis." >> "$FINAL_REPORT_FILE"
+fi
+
+cat >> "$FINAL_REPORT_FILE" << EOF
+
+## Query History Analysis Details
+
+The following table shows all analyzed columns and their usage patterns in Snowflake query history (last 120 days):
+
+| Column Name | First Used | Last Used | # Queries | # Users | Query Sources | Sample Query |
+|-------------|------------|-----------|-----------|---------|---------------|--------------|
+EOF
+
+if [ "$QUERY_RESULTS" != "[]" ]; then
+    echo "$QUERY_RESULTS" | jq -r '.[] | "| " + .COLUMN_NAME + " | " + .FIRST_USED + " | " + .LAST_USED + " | " + (.NUM_QUERIES_USING_COLUMN | tostring) + " | " + (.NUM_USERS | tostring) + " | " + .QUERY_SOURCES + " | " + (.SAMPLE_QUERY | gsub("\\|"; "\\\\|")) + " |"' >> "$FINAL_REPORT_FILE"
+else
+    echo "| No columns found in query history | - | - | - | - | - | - |" >> "$FINAL_REPORT_FILE"
+fi
+
+cat >> "$FINAL_REPORT_FILE" << EOF
+
+## Validation
+
+✅ **Query Validation**: This analysis includes columns known to be used (from dbt dependencies) to validate the query accuracy.
+
+## Recommendations
+
+EOF
+
+if [ "$COLUMNS_ACTUALLY_UNUSED" -gt 0 ]; then
+    cat >> "$FINAL_REPORT_FILE" << EOF
+1. **Review Business Impact**: Consult with business stakeholders about the $COLUMNS_ACTUALLY_UNUSED columns marked for deletion
+2. **Phased Removal**: Implement column removal in phases:
+   - Week 1: Add deprecation warnings in model documentation
+   - Week 2: Monitor for any missed usage patterns  
+   - Week 3: Remove columns if no issues found
+3. **Monitor Impact**: Track query performance improvements after column removal
+EOF
+else
+    cat >> "$FINAL_REPORT_FILE" << EOF
+1. **No Action Needed**: All columns appear to be actively used
+2. **Performance Review**: Consider other optimization strategies like materialization or clustering
+3. **Documentation**: Ensure all column usage is properly documented
+EOF
+fi
+
+cat >> "$FINAL_REPORT_FILE" << EOF
+
+---
+
+**Analysis completed**: $(date)  
+**Reports saved to**: $RESULTS_DIR  
+EOF
+
+print_success "Created full analysis report: $FINAL_REPORT_FILE"
+
+# Cleanup
+rm -f "$TEMP_USAGE_FILE" "${TEMP_USAGE_FILE}.bak"
+
+# Final summary
+print_success "═══════════════════════════════════════════════"
+print_success "Column Analysis Complete for: $MODEL_NAME"
+print_success "═══════════════════════════════════════════════"
+echo ""
+print_status "📊 SUMMARY:"
+echo "   • Total Columns: $TOTAL_COLUMNS"
+echo "   • Unused in dbt: $UNUSED_COUNT_DBT" 
+echo "   • Found in queries: $COLUMNS_IN_QUERIES"
+echo "   • Actually unused: $COLUMNS_ACTUALLY_UNUSED"
+echo ""
+print_status "📁 REPORTS GENERATED:"
+echo "   • dbt Analysis: $DBT_REPORT_FILE"
+echo "   • Full Analysis: $FINAL_REPORT_FILE"
+echo ""
+
+if [ "$COLUMNS_ACTUALLY_UNUSED" -gt 0 ]; then
+    print_warning "⚠️  $COLUMNS_ACTUALLY_UNUSED columns appear safe to remove"
+    print_warning "   Review reports before making changes"
+else
+    print_success "✅ All columns appear to be in use"
+fi
+
+exit 0

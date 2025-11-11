@@ -1,0 +1,17 @@
+# Ignore runtime artifacts
+shell-snapshots/
+todos/
+.DS_Store
+
+# Ignore local settings that shouldn't be shared
+settings.local.json
+
+# Keep the rest
+!agents/
+!skills/
+!commands/
+!projects/
+!plugins/
+!settings.json
+!CLAUDE.md
+!README.md

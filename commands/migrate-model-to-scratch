@@ -1,0 +1,468 @@
+#!/bin/bash
+
+# Claude Command: Migrate dbt Model to Scratch Naming Convention
+# Usage: migrate-model-to-scratch MODEL_NAME
+# Description: Renames model with _scratch suffix, manages aliases, and updates downstream references
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_action() {
+    echo -e "${PURPLE}[ACTION]${NC} $1"
+}
+
+# Function to show usage
+show_usage() {
+    echo "Usage: migrate-model-to-scratch MODEL_NAME"
+    echo ""
+    echo "Migrates a dbt model to scratch naming convention by:"
+    echo "  1. Renaming MODEL_NAME.sql to MODEL_NAME_scratch.sql (using git mv)"
+    echo "  2. Adding alias configuration to preserve original table name"
+    echo "  3. Updating YAML file model name if it exists"
+    echo "  4. Finding downstream refs using both grep AND dbt list"
+    echo "  5. Updating all downstream ref() calls in the same domain"
+    echo "  6. Staging changes with git"
+    echo "  7. Generating migration report"
+    echo ""
+    echo "Example:"
+    echo "  migrate-model-to-scratch core_fct_zuora_arr"
+    echo ""
+    echo "This will:"
+    echo "  • Rename: core_fct_zuora_arr.sql → core_fct_zuora_arr_scratch.sql"  
+    echo "  • Add alias: 'core_fct_zuora_arr' (preserves table name in database)"
+    echo "  • Update YAML: name: core_fct_zuora_arr → name: core_fct_zuora_arr_scratch"
+    echo "  • Update refs: ref('core_fct_zuora_arr') → ref('core_fct_zuora_arr_scratch')"
+    echo "  • Stage all changes with git"
+}
+
+# Validate input
+if [ $# -ne 1 ]; then
+    print_error "Missing model name argument"
+    show_usage
+    exit 1
+fi
+
+MODEL_NAME="$1"
+SCRATCH_MODEL_NAME="${MODEL_NAME}_scratch"
+
+# Detect project directory
+if [ -f "dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$(pwd)"
+elif [ -d "$HOME/ds-redshift" ] && [ -f "$HOME/ds-redshift/dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$HOME/ds-redshift"
+elif [ -d "$HOME/carta/ds-dbt" ] && [ -f "$HOME/carta/ds-dbt/dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$HOME/carta/ds-dbt"
+else
+    print_error "Could not find dbt project. Run from project directory or ensure ~/ds-redshift exists"
+    exit 1
+fi
+
+RESULTS_DIR="$HOME/.claude/results/model-migrations"
+mkdir -p "$RESULTS_DIR"
+
+print_status "═══════════════════════════════════════════════"
+print_status "Starting model migration to scratch naming"
+print_status "═══════════════════════════════════════════════"
+print_status "Original Model: $MODEL_NAME"
+print_status "New Name: $SCRATCH_MODEL_NAME"
+print_status "Project Dir: $DBT_PROJECT_DIR"
+echo ""
+
+# Step 1: Validate model exists and find it
+print_status "Step 1: Locating model file..."
+
+cd "$DBT_PROJECT_DIR"
+
+# Find model file (look in models directory)
+MODEL_FILE=$(find models -name "${MODEL_NAME}.sql" -type f 2>/dev/null | head -1)
+
+if [ -z "$MODEL_FILE" ]; then
+    print_error "Model '$MODEL_NAME.sql' not found in models/ directory"
+    print_error "Make sure you're running this from the correct project and the model exists"
+    exit 1
+fi
+
+print_success "Found model at: $MODEL_FILE"
+
+# Check if target scratch file already exists
+SCRATCH_MODEL_FILE="${MODEL_FILE%/*}/${SCRATCH_MODEL_NAME}.sql"
+if [ -f "$SCRATCH_MODEL_FILE" ]; then
+    print_error "Target file already exists: $SCRATCH_MODEL_FILE"
+    print_error "Migration may have already been done or there's a naming conflict"
+    exit 1
+fi
+
+# Step 2: Read and analyze current model
+print_status "Step 2: Analyzing current model configuration..."
+
+MODEL_CONTENT=$(cat "$MODEL_FILE")
+
+# Check if model has existing alias configuration
+HAS_ALIAS=""
+CURRENT_ALIAS=""
+
+if echo "$MODEL_CONTENT" | grep -qE "alias\s*[:=]"; then
+    HAS_ALIAS="yes"
+    CURRENT_ALIAS=$(echo "$MODEL_CONTENT" | grep -E "alias\s*[:=]" | head -1 | sed -E "s/.*alias\s*[:=]\s*['\"]?([^'\"]+)['\"]?.*/\1/" | xargs)
+    print_success "Found existing alias: '$CURRENT_ALIAS'"
+else
+    print_status "No existing alias found - will add original name as alias"
+fi
+
+# Step 3: Rename file using git mv
+print_status "Step 3: Renaming model file with git mv..."
+
+git mv "$MODEL_FILE" "$SCRATCH_MODEL_FILE"
+print_success "Renamed: $MODEL_FILE → $SCRATCH_MODEL_FILE"
+
+# Step 4: Add alias to config
+print_status "Step 4: Adding alias configuration..."
+
+if [ -z "$HAS_ALIAS" ]; then
+    # Read the renamed file
+    SCRATCH_CONTENT=$(cat "$SCRATCH_MODEL_FILE")
+    
+    # Check if model has config block
+    if echo "$SCRATCH_CONTENT" | grep -q "{{ *config("; then
+        # Insert alias into existing config block (add as first parameter after opening paren)
+        sed -i.bak "s/{{ *config(/{{ config(\n    alias='$MODEL_NAME'\n    ,/" "$SCRATCH_MODEL_FILE"
+        rm -f "${SCRATCH_MODEL_FILE}.bak"
+        print_action "Added alias='$MODEL_NAME' to existing config block"
+    else
+        # Add new config block at the top
+        CONFIG_BLOCK="{{ config(alias='$MODEL_NAME') }}"
+        echo -e "$CONFIG_BLOCK\n\n$(cat "$SCRATCH_MODEL_FILE")" > "$SCRATCH_MODEL_FILE"
+        print_action "Added new config block with alias='$MODEL_NAME'"
+    fi
+else
+    print_status "Keeping existing alias: '$CURRENT_ALIAS'"
+fi
+
+# Step 4.5: Update YAML file if it exists
+print_status "Step 4.5: Checking for YAML file..."
+
+YAML_FILE="${MODEL_FILE%.sql}.yml"
+
+if [ -f "$YAML_FILE" ]; then
+    print_success "Found YAML file: $YAML_FILE"
+    
+    # Update the model name in YAML
+    if grep -q "^  - name: ${MODEL_NAME}$" "$YAML_FILE"; then
+        sed -i.bak "s/^  - name: ${MODEL_NAME}$/  - name: ${SCRATCH_MODEL_NAME}/" "$YAML_FILE"
+        rm -f "${YAML_FILE}.bak"
+        print_action "Updated YAML model name: $MODEL_NAME → $SCRATCH_MODEL_NAME"
+        
+        # Stage the YAML file
+        git add "$YAML_FILE"
+    else
+        print_warning "Could not find 'name: ${MODEL_NAME}' in YAML file - manual update may be needed"
+    fi
+else
+    print_status "No YAML file found (not required)"
+fi
+
+# Step 5: Find downstream references using dual verification
+print_status "Step 5: Finding downstream references (dual verification)..."
+
+# Create temporary file to track changes
+CHANGES_FILE=$(mktemp)
+echo "# Migration Report: $MODEL_NAME → $SCRATCH_MODEL_NAME" > "$CHANGES_FILE"
+echo "Generated: $(date)" >> "$CHANGES_FILE"
+echo "" >> "$CHANGES_FILE"
+
+# Determine which directory the model is in to scope reference updates appropriately
+MODEL_DIRECTORY=$(dirname "$SCRATCH_MODEL_FILE")
+print_status "Model directory: $MODEL_DIRECTORY"
+
+# Determine search scope based on model location
+if [[ "$SCRATCH_MODEL_FILE" == *"models_scratch"* ]]; then
+    SEARCH_SCOPE="models/models_scratch/"
+    SCOPE_DESC="models_scratch directory"
+    print_status "Model is in models_scratch - will only update models_scratch references"
+elif [[ "$SCRATCH_MODEL_FILE" == *"models_verified"* ]]; then
+    SEARCH_SCOPE="models/models_verified/"
+    SCOPE_DESC="models_verified directory" 
+    print_status "Model is in models_verified - will only update models_verified references"
+else
+    SEARCH_SCOPE="models/"
+    SCOPE_DESC="all models"
+    print_status "Model location: searching all models"
+fi
+
+# Method 1: Find references using grep
+print_status "Method 1: Using grep to find text references..."
+GREP_FILES=$(grep -r -l "ref(['\"]${MODEL_NAME}['\"])" "$SEARCH_SCOPE" --exclude="${SCRATCH_MODEL_NAME}.sql" --include="*.sql" 2>/dev/null || true)
+
+if [ -n "$GREP_FILES" ]; then
+    GREP_COUNT=$(echo "$GREP_FILES" | wc -l | xargs)
+    print_success "Grep found: $GREP_COUNT files"
+else
+    GREP_COUNT=0
+    print_warning "Grep found: 0 files"
+fi
+
+# Method 2: Find references using dbt list (if dbt is available)
+print_status "Method 2: Using dbt list to find actual dependencies..."
+DBT_FILES=""
+DBT_COUNT=0
+
+if command -v poetry &> /dev/null && [ -f "pyproject.toml" ]; then
+    # Try to get downstream models from dbt
+    DBT_MODELS=$(poetry run dbt list --select "${MODEL_NAME}+1" --resource-type model --output name 2>/dev/null || echo "")
+    
+    if [ -n "$DBT_MODELS" ]; then
+        # Convert model names to file paths
+        while IFS= read -r model; do
+            if [ "$model" != "$MODEL_NAME" ]; then
+                # Find the file for this model
+                model_file=$(find "$SEARCH_SCOPE" -name "${model}.sql" -type f 2>/dev/null | head -1)
+                if [ -n "$model_file" ]; then
+                    DBT_FILES="$DBT_FILES"$'\n'"$model_file"
+                fi
+            fi
+        done <<< "$DBT_MODELS"
+        
+        DBT_COUNT=$(echo "$DBT_FILES" | grep -c "^" 2>/dev/null || echo "0")
+        print_success "dbt list found: $DBT_COUNT files"
+    else
+        print_warning "dbt list found: 0 files (or command failed)"
+    fi
+else
+    print_warning "Poetry/dbt not available - skipping dbt list check"
+fi
+
+# Compare results
+echo "## Downstream Reference Discovery" >> "$CHANGES_FILE"
+echo "" >> "$CHANGES_FILE"
+echo "### Dual Verification Results" >> "$CHANGES_FILE"
+echo "- **Grep search**: Found $GREP_COUNT files with text references" >> "$CHANGES_FILE"
+echo "- **dbt list**: Found $DBT_COUNT files with dependency references" >> "$CHANGES_FILE"
+echo "" >> "$CHANGES_FILE"
+
+if [ "$GREP_COUNT" -ne "$DBT_COUNT" ]; then
+    print_warning "⚠️  Discrepancy: grep found $GREP_COUNT files, dbt list found $DBT_COUNT files"
+    echo "**⚠️  DISCREPANCY DETECTED**: The two methods found different counts. This could indicate:" >> "$CHANGES_FILE"
+    echo "- Aliased references that grep doesn't catch" >> "$CHANGES_FILE"
+    echo "- Comments or strings that grep picks up but aren't real refs" >> "$CHANGES_FILE"
+    echo "- dbt compilation issues" >> "$CHANGES_FILE"
+    echo "" >> "$CHANGES_FILE"
+fi
+
+# Step 6: Update downstream references
+print_status "Step 6: Updating downstream references..."
+
+# Use grep results for actual file updates (more reliable for find/replace)
+if [ -z "$GREP_FILES" ]; then
+    print_warning "No downstream references found in $SCOPE_DESC"
+    echo "## Downstream References Updated" >> "$CHANGES_FILE"
+    echo "No downstream references found in $SCOPE_DESC." >> "$CHANGES_FILE"
+else
+    REFERENCE_COUNT=$(echo "$GREP_FILES" | wc -l | xargs)
+    print_success "Updating references in $REFERENCE_COUNT files"
+    
+    echo "## Downstream References Updated ($REFERENCE_COUNT files)" >> "$CHANGES_FILE"
+    echo "" >> "$CHANGES_FILE"
+    
+    # Update each file
+    echo "$GREP_FILES" | while read -r ref_file; do
+        if [ -n "$ref_file" ]; then
+            print_action "Updating: $ref_file"
+            
+            # Count occurrences before update
+            BEFORE_COUNT=$(grep -c "ref(['\"]${MODEL_NAME}['\"])" "$ref_file" 2>/dev/null || echo "0")
+            
+            # Update the references (handle both single and double quotes)
+            sed -i.bak -E "s/ref\(['\"]${MODEL_NAME}['\"]\)/ref('${SCRATCH_MODEL_NAME}')/g" "$ref_file"
+            rm -f "${ref_file}.bak"
+            
+            # Count occurrences after update  
+            AFTER_COUNT=$(grep -c "ref(['\"]${SCRATCH_MODEL_NAME}['\"])" "$ref_file" 2>/dev/null || echo "0")
+            
+            echo "- **$ref_file**: Updated $BEFORE_COUNT references" >> "$CHANGES_FILE"
+        fi
+    done
+fi
+
+# Step 7: Stage changes with git
+print_status "Step 7: Staging changes with git..."
+
+git add "$SCRATCH_MODEL_FILE"
+
+if [ -n "$GREP_FILES" ]; then
+    echo "$GREP_FILES" | while read -r ref_file; do
+        if [ -n "$ref_file" ]; then
+            git add "$ref_file"
+        fi
+    done
+fi
+
+print_success "All changes staged"
+
+# Step 8: Generate migration report
+print_status "Step 8: Generating migration report..."
+
+REPORT_FILE="$RESULTS_DIR/${MODEL_NAME}_to_scratch_migration_$(date +%Y%m%d_%H%M%S).md"
+
+cat >> "$CHANGES_FILE" << EOF
+
+## Summary
+
+### Files Changed
+- **Renamed**: \`$MODEL_FILE\` → \`$SCRATCH_MODEL_FILE\` (using git mv)
+- **Alias Added**: \`alias='$MODEL_NAME'\` (preserves table name in database)
+- **References Updated**: $REFERENCE_COUNT files in $SCOPE_DESC
+
+### Model Configuration
+\`\`\`sql
+{{ config(
+    alias='$MODEL_NAME'
+    ...
+) }}
+\`\`\`
+
+The alias ensures that:
+- The model file is named: \`${SCRATCH_MODEL_NAME}.sql\`
+- The database table is still: \`$MODEL_NAME\`
+- External tools (Looker, etc.) continue to work without changes
+
+### Reference Updates
+All downstream models in $SCOPE_DESC now reference:
+\`\`\`sql
+{{ ref('$SCRATCH_MODEL_NAME') }}
+\`\`\`
+
+Instead of:
+\`\`\`sql  
+{{ ref('$MODEL_NAME') }}
+\`\`\`
+
+### Git Status
+All changes have been staged with git and are ready to commit.
+
+## Validation Commands
+
+### 1. Verify no missed references (using both methods):
+\`\`\`bash
+# Text search
+grep -r "ref.*$MODEL_NAME" models/ --include="*.sql" | grep -v "_scratch"
+
+# dbt dependency check
+poetry run dbt list --select $MODEL_NAME+ --resource-type model
+\`\`\`
+
+### 2. Test compilation:
+\`\`\`bash
+source .env
+poetry run dbt compile --select $SCRATCH_MODEL_NAME
+\`\`\`
+
+### 3. Run the model:
+\`\`\`bash
+poetry run dbt run --select $SCRATCH_MODEL_NAME --defer --state artifacts/snowflake_prod_run
+\`\`\`
+
+### 4. Validate downstream models:
+\`\`\`bash
+poetry run dbt build --select ${SCRATCH_MODEL_NAME}+ --defer --state artifacts/snowflake_prod_run
+\`\`\`
+
+### 5. Check git status:
+\`\`\`bash
+git status
+git diff --staged
+\`\`\`
+
+## Commit Template
+
+\`\`\`bash
+git commit -m "Migrate $MODEL_NAME to scratch naming convention
+
+- Rename: $MODEL_NAME → $SCRATCH_MODEL_NAME (using git mv)
+- Add alias to preserve table name in database
+- Update $REFERENCE_COUNT downstream references in $SCOPE_DESC
+
+The model file is now ${SCRATCH_MODEL_NAME}.sql but the database 
+table remains $MODEL_NAME due to the alias configuration."
+\`\`\`
+
+## Validation Checklist
+
+- [ ] Grep and dbt list show no remaining refs to \`$MODEL_NAME\`
+- [ ] Model compiles successfully
+- [ ] Model runs without errors  
+- [ ] All downstream models compile and run
+- [ ] Database table is still named \`$MODEL_NAME\` (check with SHOW TABLES)
+- [ ] Git diff looks correct (1 rename + config change + ref updates)
+- [ ] Ready to commit
+
+---
+
+**Migration completed**: $(date)  
+**Command**: migrate-model-to-scratch $MODEL_NAME  
+**Status**: ✅ Success - Ready to commit
+EOF
+
+# Copy to final report location
+cp "$CHANGES_FILE" "$REPORT_FILE"
+rm "$CHANGES_FILE"
+
+print_success "Migration report saved: $REPORT_FILE"
+
+# Final summary
+print_success "═══════════════════════════════════════════════"
+print_success "Migration Complete!"
+print_success "═══════════════════════════════════════════════"
+echo ""
+print_status "📊 SUMMARY:"
+echo "   • Model renamed: $MODEL_NAME → $SCRATCH_MODEL_NAME (git mv)"
+echo "   • Added alias: '$MODEL_NAME' (table name preserved)"
+if [ -f "$YAML_FILE" ]; then
+    echo "   • Updated YAML: name field updated to ${SCRATCH_MODEL_NAME}"
+fi
+echo "   • Updated references: $REFERENCE_COUNT files (in $SCOPE_DESC)"
+echo "   • All changes staged with git"
+
+echo ""
+print_status "🔍 VERIFICATION:"
+echo "   • Grep found: $GREP_COUNT files"
+echo "   • dbt list found: $DBT_COUNT files"
+if [ "$GREP_COUNT" -ne "$DBT_COUNT" ]; then
+    echo "   ⚠️  Counts differ - review report for details"
+fi
+
+echo ""
+print_status "📁 REPORT:"
+echo "   • $REPORT_FILE"
+echo ""
+
+print_status "✅ NEXT STEPS:"
+echo "   1. Review: git diff --staged"
+echo "   2. Test: poetry run dbt run -m $SCRATCH_MODEL_NAME --defer --state artifacts/snowflake_prod_run"
+echo "   3. Verify: grep -r \"ref.*$MODEL_NAME\" models/ --include=\"*.sql\" | grep -v \"_scratch\""
+echo "   4. Commit when satisfied"
+
+exit 0
