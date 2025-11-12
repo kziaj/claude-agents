@@ -373,13 +373,16 @@ Commands are quick, single-purpose utilities for common tasks.
 
 ### For Medium Changes (5-10 models)
 
-**Recommended Flow:**
-1. ✅ `dbt-refactor-agent` for systematic migration
-2. ✅ Agent handles YAML, testing, documentation automatically
-3. ✅ `snowflake-agent` for data validation
-4. ✅ `pr-agent` to create PR
+**Recommended Flow (Full Migration - Scratch + Verified):**
+1. ✅ Use `migrate-model-to-scratch` or `dbt-refactor-agent` for scratch rename
+2. ✅ **Create PR #1** - Merge scratch changes first ⏸️
+3. ✅ Use `dbt-refactor-agent` to create verified versions  
+4. ✅ `snowflake-agent` for data validation
+5. ✅ **Create PR #2** - Verified models with tests & docs
 
-**Time:** 45-60 minutes
+**IMPORTANT:** If doing full migration (scratch + verified), use 2 separate PRs for independent review and cleaner rollback.
+
+**Time:** 45-60 minutes per PR (1.5-2 hours total)
 
 **Why Use Agent:** Catches 90% of issues upfront, prevents CI failures
 
@@ -387,14 +390,18 @@ Commands are quick, single-purpose utilities for common tasks.
 
 ### For Large Changes (10+ models or complex dependencies)
 
-**Recommended Flow:**
+**Recommended Flow (Full Migration - Scratch + Verified):**
 1. ✅ `model-migration-agent` to analyze dependencies first
 2. ✅ `jira-ticket-agent` to create tracking tickets
-3. ✅ `dbt-refactor-agent` for actual migration
-4. ✅ `snowflake-agent` for extensive data validation
-5. ✅ `pr-agent` to create PR
+3. ✅ `dbt-refactor-agent` for scratch rename
+4. ✅ **Create PR #1** - Merge scratch changes ⏸️
+5. ✅ `dbt-refactor-agent` for verified creation
+6. ✅ `snowflake-agent` for extensive data validation
+7. ✅ **Create PR #2** - Merge verified models
 
-**Time:** 1-2 hours (vs. 3-4 hours manual)
+**Time:** 1-2 hours per PR (2-3 hours total vs. 3-4 hours manual)
+
+**Why 2 PRs:** Independent review, cleaner rollback, better testing isolation
 
 **Why Use Agents:** Complex migrations need dependency analysis and systematic validation
 

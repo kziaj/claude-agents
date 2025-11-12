@@ -376,6 +376,105 @@ EOF
 echo ":dbt: [TICKET-ID] Create model_name_v2 in verified/ https://github.com/carta/ds-dbt/pull/XXXX" | pbcopy
 ```
 
+## CRITICAL: 2-PR Strategy for Full Migrations
+
+When migrating models from `models_scratch/` to `models_verified/`, you **MUST** use 2 separate pull requests:
+
+### PR #1: Scratch Rename
+
+**Purpose:** Prepare scratch models with proper naming conventions
+
+**Actions:**
+- Use `migrate-model-to-scratch` command for each model
+- Rename models with `_scratch` suffix (e.g., `core_dim_users.sql` → `core_dim_users_scratch.sql`)
+- Add `alias` config to preserve table names in Snowflake database
+- Update refs within `models_scratch/` directory only
+- Update YAML files to match new `_scratch` names
+- Test compilation and runs locally
+
+**Testing:**
+```bash
+# Compile to validate syntax
+poetry run dbt compile --select model_name_scratch
+
+# Run to validate execution
+poetry run dbt run --select model_name_scratch --defer --state artifacts/snowflake_prod_run
+```
+
+**Commit and PR:**
+- Create clear commit message with [TICKET-ID]
+- Create PR #1 with title like: "[DA-1234] Rename subscription models to _scratch naming"
+- Get review and approval
+- **⏸️ Merge PR #1 and wait before proceeding to PR #2**
+
+---
+
+### PR #2: Verified Creation (AFTER PR #1 merges)
+
+**Purpose:** Create production-ready models in `models_verified/` directory
+
+**Actions:**
+- Create new models in `models_verified/<domain>/<layer>/`
+- Follow all verified/ standards:
+  - Add `_v2` suffix during migration (e.g., `core_dim_users_v2.sql`)
+  - Explicit column lists (no `SELECT *`)
+  - Primary key defined and tested (core/mart layers)
+  - `cluster_by` configuration (core/mart layers)
+  - Comprehensive YAML documentation
+  - All columns documented
+- Update refs in `models_verified/` to point to new verified models
+- Validate data quality (compare scratch vs verified results)
+
+**Data Quality Validation:**
+```bash
+# Compare row counts
+snow sql --query "SELECT COUNT(*) FROM dbt_core.model_name;" --format JSON
+snow sql --query "SELECT COUNT(*) FROM dbt_verified_core.model_name_v2;" --format JSON
+
+# Validate key columns match
+# Use snowflake-agent for comprehensive data validation
+```
+
+**Testing:**
+```bash
+# Compile
+poetry run dbt compile --select model_name_v2
+
+# Build (run + test)
+poetry run dbt build --select model_name_v2 --defer --state artifacts/snowflake_prod_run
+
+# Validate downstream
+poetry run dbt build --select model_name_v2+ --defer --state artifacts/snowflake_prod_run
+```
+
+**Commit and PR:**
+- Create clear commit message with [TICKET-ID]
+- Create PR #2 with title like: "[DA-1234] Create verified subscription models with tests and docs"
+- Include data validation screenshots in PR description
+- Get review and approval
+- Merge PR #2
+
+---
+
+### Why 2 Separate PRs?
+
+**✅ Benefits:**
+- **Independent review scope** - Scratch changes vs verified creation are different concerns
+- **Easier rollback** - Can revert verified models without touching scratch
+- **Better testing isolation** - Validate scratch changes work before building verified
+- **Cleaner git history** - Clear separation of refactoring vs new model creation
+- **Reduced PR complexity** - Smaller, focused PRs are easier to review
+- **CI/CD efficiency** - Smaller changesets run faster in CI
+
+**❌ Problems with Single PR:**
+- Massive PR with mixed concerns (renaming + creation + testing + docs)
+- Hard to review: reviewer must understand both scratch AND verified changes
+- Difficult rollback: rolling back verified also reverts scratch changes
+- Long CI times for large changesets
+- Messy git history with intertwined changes
+
+---
+
 ## Domain Migration Workflow
 
 When migrating an entire domain to verified/:
