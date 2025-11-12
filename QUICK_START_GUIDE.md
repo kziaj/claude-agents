@@ -111,6 +111,33 @@ ls -la models_scratch/core/core_fct_revenue_daily_scratch.sql
 grep "alias:" models_scratch/core/core_fct_revenue_daily_scratch.sql
 ```
 
+---
+
+**⚠️ IMPORTANT: 2-PR Strategy for Full Migrations**
+
+When doing a full migration (scratch rename + verified creation), you **MUST** split the work into 2 separate pull requests:
+
+**📋 PR #1 - Scratch Changes (Step 2 above):**
+- Rename models in `models_scratch/` with `_scratch` suffix
+- Add `alias` config to preserve table names in Snowflake
+- Update all refs in `models_scratch/` to point to `_scratch` versions
+- Test locally (`dbt run`), commit, and create PR
+- **⏸️ Wait for this PR to be reviewed and merged before proceeding**
+
+**📋 PR #2 - Verified Creation (Steps 3-5 below):**
+- Create new models in `models_verified/` with proper architecture
+- Add tests, documentation, and configs
+- Validate data quality between scratch and verified
+- Test locally, commit, and create PR
+
+**Why 2 PRs?**
+- ✅ **Independent review** - Each PR has clear, focused scope
+- ✅ **Easier testing** - Validate scratch changes before building verified
+- ✅ **Cleaner rollback** - Can revert one without affecting the other
+- ✅ **Better git history** - Clear separation of concerns
+
+---
+
 ### Step 3: Create Verified Version with Agent
 
 ```plaintext
@@ -310,21 +337,32 @@ all dependencies"
 ```
 
 ```plaintext
-# Phase 2: Migration
-"Use dbt-refactor-agent to migrate all 7 subscription models to 
+# Phase 2A: Scratch Rename (PR #1)
+"Use migrate-model-to-scratch for all 7 subscription models:
+- Rename with _scratch suffix
+- Add alias configs
+- Update refs in scratch directory"
+
+# Result: Scratch versions created, refs updated
+```
+
+**Create PR #1, get review, and merge ⏸️**
+
+```plaintext
+# Phase 2B: Verified Creation (PR #2)
+"Use dbt-refactor-agent to create verified versions of 7 models in
 transform/corporations/ with:
-- Rename scratch versions with _scratch suffix
-- Create verified versions with transform_ prefix
-- Update 39 downstream refs in verified/
-- Add YAMLs with descriptions
+- New verified models with transform_ prefix
+- Tests and documentation
+- Update downstream refs in verified/
 - Data quality validation"
 
-# Result: All 7 models migrated, validated, ready to commit
+# Result: Verified versions created, validated
 ```
 
 ```plaintext
-# Phase 3: PR
-"Use pr-agent to create PR with data validation screenshots"
+# Phase 3: Final PR
+"Use pr-agent to create PR #2 with data validation screenshots"
 
 # Result: Clean PR with comprehensive description
 ```
@@ -629,18 +667,24 @@ Use pr-agent to capture:
 
 ---
 
-### 7. One Logical Change Per Commit
+### 7. Two PRs for Full Migrations
 
-**Good:**
-- Commit 1: Rename scratch models
-- Commit 2: Create verified versions
-- Commit 3: Update downstream refs
+**IMPORTANT:** When doing a full migration (scratch rename + verified creation), always use 2 separate PRs:
 
-**Bad:**
-- Commit 1: Everything mixed together
-- Commits 2-7: Fix CI failures
+**✅ Good - 2 Separate PRs:**
+- **PR #1:** Rename models with `_scratch` suffix, add aliases, update refs in `scratch/`
+- **Merge PR #1** ⏸️ Wait for review and merge
+- **PR #2:** Create models in `verified/` with tests, docs, and data validation
 
-**Why:** Easier to review, easier to revert if needed
+**❌ Bad - Single PR:**
+- PR #1: Mix scratch rename + verified creation + everything together
+- Result: Massive PR, hard to review, messy rollback
+
+**Why 2 PRs?**
+- **Easier review:** Each PR has clear, focused scope (scratch vs verified)
+- **Independent testing:** Validate scratch changes work before building verified
+- **Cleaner rollback:** Can revert verified without touching scratch
+- **Better git history:** Separation of concerns
 
 ---
 
