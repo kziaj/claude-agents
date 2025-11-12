@@ -180,3 +180,71 @@ Please follow the following steps when I ask you to translate LookML code to Sno
 
 1. Output the full yaml to a file. Call the file cortex_<name_of_lookml_model>.yaml.
     e.g. If the LookML model file is sent_email.model.lkml, the file should be called cortex_sent_email.yaml
+
+# dbt Model Migration Best Practices
+
+When migrating or refactoring multiple dbt models in ds-dbt repository:
+
+## 1. Consider Using dbt-refactor-agent for Bulk Changes
+
+For systematic changes affecting **5+ models**, use the dbt-refactor-agent:
+- The agent analyzes models, identifies compliance issues, fixes code structure, adds tests/documentation
+- Use: `Task tool with subagent_type: dbt-refactor-agent`
+- This prevents iterative fix cycles by catching issues upfront
+
+## 2. Validate Locally BEFORE Pushing
+
+**ALWAYS run these commands before pushing:**
+
+```bash
+# Check all models have descriptions (REQUIRED by pre-commit)
+poetry run pre-commit run check-model-has-description --all-files
+
+# Verify models compile without errors
+poetry run dbt parse
+
+# Check for required tests
+poetry run pre-commit run check-model-has-tests-by-name --all-files
+```
+
+## 3. Check All Downstream References
+
+When renaming models, find all references that need updating:
+
+```bash
+# Find all references to a model
+grep -r "ref('old_model_name')" models/
+```
+
+## 4. Ensure YAML Files Match SQL Files
+
+**Critical requirements:**
+- Every `.sql` file needs a corresponding `.yml` file
+- The `name:` field in YAML must match the SQL filename
+- All models MUST have a `description:` field (required by pre-commit hooks)
+
+**Example YAML structure:**
+```yaml
+models:
+  - name: model_name
+    description: 'Brief description of what this model does'
+    columns:
+      - name: column_name
+        description: ''
+```
+
+## 5. Systematic Approach for Bulk Changes
+
+- Use `grep` to identify patterns
+- Use `sed` or scripts for bulk replacements
+- Commit changes in logical groups (e.g., "rename YAMLs", "add descriptions", "update refs")
+- Validate after each commit group
+
+## Common Issues This Prevents
+
+- ❌ Missing model descriptions causing pre-commit failures
+- ❌ Broken references after renaming models
+- ❌ YAML files not matching SQL filenames
+- ❌ Compilation errors from incorrect `ref()` calls
+
+---

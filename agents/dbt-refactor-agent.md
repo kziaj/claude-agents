@@ -293,6 +293,65 @@ Transform models will fail CI if they don't have:
 
 Always verify tests pass locally before pushing to avoid CI failures.
 
+### 4.5. **Verified Standards Validation (If Migrating to verified/)**
+
+**CRITICAL**: If you've created or modified models in `models_verified/`, you MUST run the validation command:
+
+```bash
+cd ~/carta/ds-dbt  # or ~/ds-redshift
+
+# Run validation command (checks 7 standards)
+validate-verified-standards
+```
+
+**What this checks:**
+1. ✅ No alias configs in verified/ (prevents 12 alias violations like DA-4090)
+2. ✅ No SELECT * in verified/ (prevents 9 SELECT * violations like DA-4090)
+3. ✅ All SQL files have matching YAML
+4. ✅ All models have descriptions
+5. ✅ YAML names match filenames
+6. ✅ No orphaned YAML files
+7. ✅ dbt parse succeeds
+
+**If validation fails:**
+- Review the specific violations reported
+- Fix each issue systematically
+- Re-run validation until all checks pass
+- **DO NOT commit** until validation passes
+
+**Why this matters:**
+In DA-4090, we had to create a separate PR (#9017) to fix 12 alias violations and 9 SELECT * violations that should have been caught before the initial commit. This command prevents that rework.
+
+**Example output:**
+```
+═══════════════════════════════════════════════
+Verified Model Standards Validation
+═══════════════════════════════════════════════
+
+[CHECK] Check 1: No 'alias=' configs in models_verified/
+✅ PASS No alias configs found
+
+[CHECK] Check 2: No 'SELECT *' in models_verified/
+✅ PASS No SELECT * found
+
+[CHECK] Check 3: All .sql files have matching .yml files
+✅ PASS All SQL files have matching YAML files
+
+...
+
+═══════════════════════════════════════════════
+Validation Summary
+═══════════════════════════════════════════════
+
+Total Checks: 7
+Passed: 7
+Failed: 0
+
+✅ All verified/ standards checks passed!
+
+✅ Your verified/ models are compliant and ready to commit.
+```
+
 ### 5. **Documentation & Commit**
 
 **Create clear commit message:**
@@ -577,6 +636,7 @@ Search for similar models: `find ~/carta/ds-dbt/models -name "*partial_name*"`
 ## Quality Assurance Checklist
 
 Before finalizing:
+- [ ] **RUN validate-verified-standards** (if migrating to verified/) - catches 90% of issues
 - [ ] **CRITICAL**: Verified model is NOT incremental/snapshot (or backfill completed by Data Engineering)
 - [ ] **No SELECT * usage** - all columns explicitly listed
 - [ ] **No version suffixes (_v2, _v3)** in production model names (only during migration)

@@ -25,6 +25,42 @@ base → transform → core → mart
 - Transform can reference base or other transform models
 - Core models are the single source of truth
 
+## Domain Separation
+
+**CRITICAL**: Verified models can ONLY reference other verified models. Scratch models can ONLY reference other scratch models.
+
+**Wrong:**
+```sql
+-- models_verified/transform/model.sql
+{{ ref('base_model') }}  -- ❌ References scratch base
+```
+
+**Right:**
+```sql
+-- models_verified/transform/model.sql
+{{ ref('base_model') }}  -- ✅ References verified base (same name, different directory)
+
+-- models_scratch/transform/model_scratch.sql
+{{ ref('base_model_scratch') }}  -- ✅ References scratch base
+```
+
+This means when migrating a model to verified/, you MUST also migrate all its dependencies to verified/ (base models, transform models, etc.).
+
+## File Creation Best Practices
+
+**NEVER copy files from scratch/ to verified/.** Always create NEW files.
+
+**For Scratch Models:**
+- RENAME with `git mv` to `_scratch` suffix
+- ADD `alias` config to preserve Snowflake table names
+- UPDATE internal refs to other `_scratch` models
+
+**For Verified Models:**
+- CREATE NEW FILES in verified/ directory
+- READ scratch version to understand business logic
+- WRITE SQL from understanding (not copy-paste)
+- FOLLOW verified/ styleguide and conventions
+
 ## Directory Structure
 
 ```
@@ -44,16 +80,112 @@ models/
 
 ## Naming Convention for verified/ Models
 
-**CRITICAL**: All models in `verified/` directory must include `_v2` suffix until migration is complete.
+**Production Names**: All models in `verified/` directory use clean production names (no version suffixes).
 
 **Examples:**
-- `base_corporations_corporations_v2`
-- `transform_fund_partner_contribute_v2`
-- `core_dim_users_v2`
-- `core_fct_transactions_v2`
-- `mart_daily_revenue_v2`
+- `base_corporations_corporations`
+- `transform_fund_partner_contribute`
+- `core_dim_users`
+- `core_fct_transactions`
+- `mart_daily_revenue`
 
-This allows coexistence of old and new models during the migration period.
+**Scratch Models**: When migrating to verified/, scratch versions are renamed with `_scratch` suffix and use `alias` config to preserve table names:
+- `base_corporations_corporations_scratch` (with `alias='base_corporations_corporations'`)
+
+This allows coexistence during migration while maintaining clean production names.
+
+## Verified Model Standards (CRITICAL)
+
+**These rules are STRICTLY ENFORCED for models in `models_verified/` directory.**
+
+### Rule 1: NO Alias Configs in Verified Models
+
+**Rationale**: In verified/, the filename IS the table name. Using `alias` configs breaks this contract and causes confusion.
+
+**Wrong ❌:**
+```sql
+-- models_verified/base/revenue_service/base_revenue_service_charge.sql
+{{
+  config(
+    alias='revenue_service_charge',  -- ❌ NEVER in verified/
+    materialized='ephemeral'
+  )
+}}
+```
+
+**Right ✅:**
+```sql
+-- models_verified/base/revenue_service/base_revenue_service_charge.sql
+{{
+  config(
+    materialized='ephemeral'
+  )
+}}
+
+-- Snowflake table name: base_revenue_service_charge (matches filename)
+```
+
+**Scratch models only:**
+```sql
+-- models_scratch/base/base_revenue_service_charge_scratch.sql
+{{ config(alias='base_revenue_service_charge') }}  -- ✅ OK in scratch/
+{{
+  config(
+    materialized='ephemeral'
+  )
+}}
+```
+
+### Rule 2: NO SELECT * in Verified Models
+
+**Rationale**: SELECT * creates fragile dependencies. If upstream schema changes, verified models break unexpectedly. Explicit columns make dependencies clear and prevent downstream breakage.
+
+**Wrong ❌:**
+```sql
+-- models_verified/transform/model.sql
+WITH base AS (
+  SELECT *  -- ❌ NEVER in verified/
+  FROM {{ ref('base_model') }}
+)
+SELECT * FROM base  -- ❌ NEVER in verified/
+```
+
+**Right ✅:**
+```sql
+-- models_verified/transform/model.sql
+WITH base AS (
+  SELECT
+    subscription_id
+    , yearly_value_cents_net
+    , tier
+    , created_at
+  FROM {{ ref('base_model') }}
+)
+SELECT
+  subscription_id
+  , yearly_value_cents_net
+  , tier
+  , created_at
+FROM base
+```
+
+### Validation Command
+
+Before committing verified/ models, run:
+```bash
+validate-verified-standards
+```
+
+This checks:
+- ✅ No alias configs in verified/
+- ✅ No SELECT * in verified/
+- ✅ All SQL files have matching YAML
+- ✅ All models have descriptions
+- ✅ YAML names match filenames
+- ✅ No orphaned YAML files
+- ✅ dbt parse succeeds
+
+**Example from DA-4090**: This command would have caught 12 alias violations and 9 SELECT * violations before commit, saving 2+ hours of rework.
 
 ## Testing Requirements by Layer
 
