@@ -149,10 +149,53 @@ if [ -z "$HAS_ALIAS" ]; then
     
     # Check if model has config block
     if echo "$SCRATCH_CONTENT" | grep -q "{{ *config("; then
-        # Insert alias into existing config block (add as first parameter after opening paren)
-        sed -i.bak "s/{{ *config(/{{ config(\n    alias='$MODEL_NAME'\n    ,/" "$SCRATCH_MODEL_FILE"
-        rm -f "${SCRATCH_MODEL_FILE}.bak"
-        print_action "Added alias='$MODEL_NAME' to existing config block"
+        # Extract the entire config block (handles multi-line configs)
+        CONFIG_START=$(grep -n "{{ *config(" "$SCRATCH_MODEL_FILE" | head -1 | cut -d: -f1)
+        
+        # Check if config block is empty
+        if echo "$SCRATCH_CONTENT" | grep -q "{{ *config() *}}"; then
+            # Config block is empty, replace it
+            sed -i.bak "s/{{ *config() *}}/{{ config(alias='$MODEL_NAME') }}/" "$SCRATCH_MODEL_FILE"
+            rm -f "${SCRATCH_MODEL_FILE}.bak"
+            print_action "Replaced empty config block with alias='$MODEL_NAME'"
+        elif echo "$SCRATCH_CONTENT" | grep -q "{{ *config([^)]"; then
+            # Config has parameters - need to merge properly
+            # Use Python to safely parse and merge config block
+            python3 << 'PYEOF' "$SCRATCH_MODEL_FILE" "$MODEL_NAME"
+import sys
+import re
+
+file_path = sys.argv[1]
+model_name = sys.argv[2]
+
+with open(file_path, 'r') as f:
+    content = f.read()
+
+# Find config block using regex (handles multi-line)
+config_pattern = r'\{\{\s*config\s*\((.*?)\)\s*\}\}'
+match = re.search(config_pattern, content, re.DOTALL)
+
+if match:
+    config_content = match.group(1).strip()
+    
+    # Check if already has alias
+    if 'alias' not in config_content:
+        # Add alias as first parameter
+        if config_content:
+            # Has existing params
+            new_config = f"{{{{ config(\n    alias='{model_name}',\n    {config_content}\n) }}}}"
+        else:
+            # Empty params
+            new_config = f"{{{{ config(alias='{model_name}') }}}}"
+        
+        # Replace old config with new
+        new_content = content[:match.start()] + new_config + content[match.end():]
+        
+        with open(file_path, 'w') as f:
+            f.write(new_content)
+PYEOF
+            print_action "Merged alias='$MODEL_NAME' into existing config block"
+        fi
     else
         # Add new config block at the top
         CONFIG_BLOCK="{{ config(alias='$MODEL_NAME') }}"
@@ -308,6 +351,46 @@ else
     done
 fi
 
+# Step 6.5: Update snapshot references
+print_status "Step 6.5: Checking for snapshot references..."
+
+SNAPSHOT_FILES=$(grep -r -l "ref(['\"]${MODEL_NAME}['\"])" snapshots/ --include="*.sql" 2>/dev/null || true)
+
+if [ -z "$SNAPSHOT_FILES" ]; then
+    print_status "No snapshot references found"
+    echo "" >> "$CHANGES_FILE"
+    echo "## Snapshot References" >> "$CHANGES_FILE"
+    echo "No snapshot files reference this model." >> "$CHANGES_FILE"
+else
+    SNAPSHOT_COUNT=$(echo "$SNAPSHOT_FILES" | wc -l | xargs)
+    print_success "Found $SNAPSHOT_COUNT snapshot file(s) to update"
+    
+    echo "" >> "$CHANGES_FILE"
+    echo "## Snapshot References Updated ($SNAPSHOT_COUNT files)" >> "$CHANGES_FILE"
+    echo "" >> "$CHANGES_FILE"
+    
+    echo "$SNAPSHOT_FILES" | while read -r snap_file; do
+        if [ -n "$snap_file" ]; then
+            print_action "Updating snapshot: $snap_file"
+            
+            # Count occurrences
+            SNAP_BEFORE_COUNT=$(grep -c "ref(['\"]${MODEL_NAME}['\"])" "$snap_file" 2>/dev/null || echo "0")
+            
+            # Update the references
+            sed -i.bak -E "s/ref\(['\"]${MODEL_NAME}['\"]\)/ref('${SCRATCH_MODEL_NAME}')/g" "$snap_file"
+            rm -f "${snap_file}.bak"
+            
+            # Count after
+            SNAP_AFTER_COUNT=$(grep -c "ref(['\"]${SCRATCH_MODEL_NAME}['\"])" "$snap_file" 2>/dev/null || echo "0")
+            
+            echo "- **$snap_file**: Updated $SNAP_BEFORE_COUNT references" >> "$CHANGES_FILE"
+            
+            # Stage the snapshot file
+            git add "$snap_file"
+        fi
+    done
+fi
+
 # Step 7: Stage changes with git
 print_status "Step 7: Staging changes with git..."
 
@@ -323,25 +406,34 @@ fi
 
 print_success "All changes staged"
 
-# Step 7.5: Compile model to validate
-print_status "Step 7.5: Validating model compilation..."
+# Step 7.5: Compile model to validate (optional)
+print_status "Step 7.5: Validating model compilation (optional)..."
 
-if command -v poetry &> /dev/null && [ -f "pyproject.toml" ]; then
-    # Try to compile the model
-    COMPILE_OUTPUT=$(poetry run dbt compile --select "$SCRATCH_MODEL_NAME" 2>&1)
-    COMPILE_EXIT_CODE=$?
-    
-    if [ $COMPILE_EXIT_CODE -eq 0 ]; then
+if [[ "${SKIP_COMPILE:-false}" == "true" ]]; then
+    print_status "Skipping compilation (SKIP_COMPILE=true)"
+    COMPILE_STATUS="⊘ SKIPPED (user requested)"
+elif command -v poetry &> /dev/null && [ -f "pyproject.toml" ]; then
+    # Try to compile the model with 5-minute timeout
+    print_status "Running dbt compile (timeout: 5 minutes)..."
+    if timeout 300 poetry run dbt compile --select "$SCRATCH_MODEL_NAME" > /tmp/compile_output.txt 2>&1; then
         print_success "✓ Model compiles successfully"
         COMPILE_STATUS="✅ SUCCESS"
     else
-        print_warning "⚠️  Compilation failed (this may be expected if dependent models aren't migrated yet)"
-        echo ""
-        echo "$COMPILE_OUTPUT" | grep -A 5 "Compilation Error" || echo "$COMPILE_OUTPUT" | tail -20
-        echo ""
-        print_status "You can continue - review the error to determine if it's expected"
-        COMPILE_STATUS="⚠️  FAILED (review error above)"
+        EXIT_CODE=$?
+        if [ $EXIT_CODE -eq 124 ]; then
+            print_warning "⚠️  Compilation timed out after 5 minutes (likely still running)"
+            print_status "Set SKIP_COMPILE=true to skip validation entirely"
+            COMPILE_STATUS="⏱️  TIMEOUT (set SKIP_COMPILE=true to skip)"
+        else
+            print_warning "⚠️  Compilation failed (this may be expected if dependent models aren't migrated yet)"
+            echo ""
+            cat /tmp/compile_output.txt | grep -A 5 "Compilation Error" || cat /tmp/compile_output.txt | tail -20
+            echo ""
+            print_status "You can continue - review the error to determine if it's expected"
+            COMPILE_STATUS="⚠️  FAILED (review error above)"
+        fi
     fi
+    rm -f /tmp/compile_output.txt
 else
     print_warning "Poetry/dbt not available - skipping compilation check"
     COMPILE_STATUS="⊘ SKIPPED (poetry not available)"
@@ -505,5 +597,9 @@ else
     echo "   4. Re-compile: poetry run dbt compile --select $SCRATCH_MODEL_NAME"
     echo "   5. Commit when satisfied"
 fi
+
+# Output parseable summary for programmatic use
+echo ""
+echo "MIGRATION_SUMMARY: renamed=1 downstream_refs=$REFERENCE_COUNT snapshots=${SNAPSHOT_COUNT:-0} status=success"
 
 exit 0

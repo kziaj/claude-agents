@@ -303,7 +303,35 @@ Commands are quick, single-purpose utilities for common tasks.
 
 ---
 
-### 2. **bulk-model-rename**
+### 2. **update-yaml-metadata**
+*Bulk update metadata fields in YAML files*
+
+**Use When:**
+- Resolving merge conflicts in YAML metadata
+- Bulk updating downstream/upstream node counts
+- Synchronizing metadata across multiple files
+- Post-migration metadata cleanup
+
+**Usage:**
+```bash
+~/.claude/commands/update-yaml-metadata '*_scratch.yml' total_downstream_nodes 301 303
+```
+
+**What It Does:**
+1. Finds all YAML files matching pattern
+2. Updates specified metadata field
+3. Validates changes
+4. Stages with git
+
+**Time:** ~30 seconds for 10+ files
+
+**Real Example:** Updated 9 YAML files in DA-4090 to resolve merge conflicts after main branch changed metadata values.
+
+📄 [Full Documentation](#update-yaml-metadata-reference)
+
+---
+
+### 3. **bulk-model-rename**
 *Pattern-based bulk renaming across many models*
 
 **Use When:**
@@ -328,7 +356,7 @@ Commands are quick, single-purpose utilities for common tasks.
 
 ---
 
-### 3. **analyze-unused-columns**
+### 4. **analyze-unused-columns**
 *Identify unused columns before refactoring*
 
 **Use When:**

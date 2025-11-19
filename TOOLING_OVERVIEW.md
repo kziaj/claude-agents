@@ -45,7 +45,7 @@ Reusable SQL patterns for validating data consistency between scratch/ and verif
 
 ---
 
-### COMMANDS (7)
+### COMMANDS (8)
 
 **1. validate-timestamp-naming**  
 Scans base models to detect timestamp columns missing `_at` suffix and prevents violations from reaching production during the refactor migration.
@@ -68,6 +68,9 @@ Traces column-level upstream/downstream dependencies using Snowflake metadata to
 **7. migrate-model-to-scratch**  
 Automates the scratch model renaming with `_scratch` suffix and alias management to enable parallel scratch/verified coexistence during gradual migration.
 
+**8. update-yaml-metadata**  
+Bulk updates metadata fields in YAML files (e.g., total_downstream_nodes) to resolve merge conflicts or synchronize metadata across multiple files after migrations.
+
 ---
 
 ## Refactor Workflow: Complete Domain Migration
@@ -86,9 +89,10 @@ Automates the scratch model renaming with `_scratch` suffix and alias management
 ### Phase 3: Migration Execution
 
 6. **migrate-model-to-scratch** → Renames existing scratch models with `_scratch` suffix and adds aliases
-7. **dbt-refactor-agent** → Refactors individual models to meet verified/ standards (fixes SELECT *, adds tests/docs, removes aliases)
-8. **model-migration-agent** → Handles any bulk renames or directory reorganizations across the domain
-9. **bulk-model-rename** → Executes pattern-based renames if standardizing naming across many models
+7. **update-yaml-metadata** → Updates YAML metadata fields in bulk (used for merge conflicts or metadata sync)
+8. **dbt-refactor-agent** → Refactors individual models to meet verified/ standards (fixes SELECT *, adds tests/docs, removes aliases)
+9. **model-migration-agent** → Handles any bulk renames or directory reorganizations across the domain
+10. **bulk-model-rename** → Executes pattern-based renames if standardizing naming across many models
 
 ### Phase 4: Quality Validation
 

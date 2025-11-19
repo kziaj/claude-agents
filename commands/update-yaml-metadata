@@ -1,0 +1,222 @@
+#!/bin/bash
+
+# Claude Command: Bulk Update YAML Metadata Fields
+# Usage: update-yaml-metadata PATTERN FIELD OLD_VALUE NEW_VALUE
+# Description: Updates metadata fields in multiple YAML files matching a pattern
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_action() {
+    echo -e "${PURPLE}[ACTION]${NC} $1"
+}
+
+# Function to show usage
+show_usage() {
+    echo "Usage: update-yaml-metadata PATTERN FIELD OLD_VALUE NEW_VALUE"
+    echo ""
+    echo "Updates a metadata field in all YAML files matching the pattern."
+    echo ""
+    echo "Parameters:"
+    echo "  PATTERN    - File pattern (e.g., '*_scratch.yml' or 'models/**/*.yml')"
+    echo "  FIELD      - Metadata field name (e.g., 'total_downstream_nodes')"
+    echo "  OLD_VALUE  - Current value to find"
+    echo "  NEW_VALUE  - New value to replace with"
+    echo ""
+    echo "Examples:"
+    echo "  # Update downstream nodes count in all scratch models"
+    echo "  update-yaml-metadata '*_scratch.yml' total_downstream_nodes 301 303"
+    echo ""
+    echo "  # Update upstream nodes in specific directory"
+    echo "  update-yaml-metadata 'models/core/subscriptions/*.yml' total_upstream_nodes 8 10"
+    echo ""
+    echo "The command will:"
+    echo "  • Find all YAML files matching the pattern"
+    echo "  • Update the specified field from old to new value"
+    echo "  • Stage changes with git"
+    echo "  • Provide summary of files updated"
+}
+
+# Validate input
+if [ $# -ne 4 ]; then
+    print_error "Incorrect number of arguments"
+    show_usage
+    exit 1
+fi
+
+PATTERN="$1"
+FIELD="$2"
+OLD_VALUE="$3"
+NEW_VALUE="$4"
+
+# Detect project directory
+if [ -f "dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$(pwd)"
+elif [ -d "$HOME/ds-redshift" ] && [ -f "$HOME/ds-redshift/dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$HOME/ds-redshift"
+elif [ -d "$HOME/carta/ds-dbt" ] && [ -f "$HOME/carta/ds-dbt/dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$HOME/carta/ds-dbt"
+else
+    print_error "Could not find dbt project. Run from project directory or ensure ~/ds-redshift exists"
+    exit 1
+fi
+
+cd "$DBT_PROJECT_DIR"
+
+print_status "═══════════════════════════════════════════════"
+print_status "Bulk YAML Metadata Update"
+print_status "═══════════════════════════════════════════════"
+print_status "Pattern: $PATTERN"
+print_status "Field: $FIELD"
+print_status "Old Value: $OLD_VALUE"
+print_status "New Value: $NEW_VALUE"
+print_status "Project Dir: $DBT_PROJECT_DIR"
+echo ""
+
+# Step 1: Find matching files
+print_status "Step 1: Finding matching YAML files..."
+
+# Use find with pattern matching
+if [[ "$PATTERN" == *"/"* ]]; then
+    # Pattern includes path
+    YAML_FILES=$(find models -path "*${PATTERN}" -type f 2>/dev/null || true)
+else
+    # Pattern is just filename
+    YAML_FILES=$(find models -name "${PATTERN}" -type f 2>/dev/null || true)
+fi
+
+if [ -z "$YAML_FILES" ]; then
+    print_error "No YAML files found matching pattern: $PATTERN"
+    exit 1
+fi
+
+FILE_COUNT=$(echo "$YAML_FILES" | wc -l | xargs)
+print_success "Found $FILE_COUNT YAML file(s) matching pattern"
+echo ""
+
+# Step 2: Check which files contain the field with old value
+print_status "Step 2: Checking files for field with old value..."
+
+FILES_TO_UPDATE=""
+MATCHED_COUNT=0
+
+echo "$YAML_FILES" | while read -r yaml_file; do
+    if [ -n "$yaml_file" ]; then
+        # Check if file contains the field with old value
+        if grep -q "${FIELD}: ${OLD_VALUE}" "$yaml_file" 2>/dev/null; then
+            echo "$yaml_file"
+            MATCHED_COUNT=$((MATCHED_COUNT + 1))
+        fi
+    fi
+done > /tmp/files_to_update.txt
+
+FILES_TO_UPDATE=$(cat /tmp/files_to_update.txt)
+MATCHED_COUNT=$(cat /tmp/files_to_update.txt | wc -l | xargs)
+
+if [ -z "$FILES_TO_UPDATE" ] || [ "$MATCHED_COUNT" -eq 0 ]; then
+    print_warning "No files found with ${FIELD}: ${OLD_VALUE}"
+    print_status "Files searched: $FILE_COUNT"
+    echo ""
+    echo "$YAML_FILES" | head -5 | while read -r f; do
+        if [ -n "$f" ]; then
+            echo "Sample file: $f"
+            grep "${FIELD}:" "$f" 2>/dev/null || echo "  (field not found)"
+        fi
+    done
+    rm -f /tmp/files_to_update.txt
+    exit 0
+fi
+
+print_success "Found $MATCHED_COUNT file(s) with ${FIELD}: ${OLD_VALUE}"
+echo ""
+
+# Step 3: Update files
+print_status "Step 3: Updating files..."
+
+UPDATED_COUNT=0
+
+cat /tmp/files_to_update.txt | while read -r yaml_file; do
+    if [ -n "$yaml_file" ]; then
+        print_action "Updating: $yaml_file"
+        
+        # Use sed to replace the field value
+        sed -i.bak "s/\(${FIELD}:\) ${OLD_VALUE}/\1 ${NEW_VALUE}/" "$yaml_file"
+        rm -f "${yaml_file}.bak"
+        
+        UPDATED_COUNT=$((UPDATED_COUNT + 1))
+        
+        # Stage the file
+        git add "$yaml_file"
+    fi
+done
+
+print_success "Updated $MATCHED_COUNT file(s)"
+echo ""
+
+# Step 4: Verify updates
+print_status "Step 4: Verifying updates..."
+
+VERIFY_COUNT=0
+cat /tmp/files_to_update.txt | while read -r yaml_file; do
+    if [ -n "$yaml_file" ]; then
+        if grep -q "${FIELD}: ${NEW_VALUE}" "$yaml_file" 2>/dev/null; then
+            VERIFY_COUNT=$((VERIFY_COUNT + 1))
+        else
+            print_warning "Verification failed for: $yaml_file"
+        fi
+    fi
+done
+
+rm -f /tmp/files_to_update.txt
+
+print_success "All files verified"
+echo ""
+
+# Final summary
+print_success "═══════════════════════════════════════════════"
+print_success "Update Complete!"
+print_success "═══════════════════════════════════════════════"
+echo ""
+print_status "📊 SUMMARY:"
+echo "   • Files searched: $FILE_COUNT"
+echo "   • Files matched: $MATCHED_COUNT"
+echo "   • Files updated: $MATCHED_COUNT"
+echo "   • Field: ${FIELD}"
+echo "   • Changed: ${OLD_VALUE} → ${NEW_VALUE}"
+echo "   • All changes staged with git"
+echo ""
+
+print_status "✅ NEXT STEPS:"
+echo "   1. Review: git diff --staged"
+echo "   2. Verify: git status"
+echo "   3. Commit when satisfied"
+echo ""
+
+# Output parseable summary
+echo "UPDATE_SUMMARY: searched=$FILE_COUNT matched=$MATCHED_COUNT updated=$MATCHED_COUNT status=success"
+
+exit 0
