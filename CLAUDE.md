@@ -14,10 +14,10 @@ Use the Bash tool for ALL git-related tasks. This workflow MUST be followed for 
 ---
 
 ## 1. Branching
-All work MUST be done on a new feature branch. The branch name MUST follow this exact convention: `th/{lowercase-jira-ticket}/{kebab-case-description}`. The `th` prefix stands for "Klajdi Ziaj".
+All work MUST be done on a new feature branch. The branch name MUST follow this exact convention: `kz/{lowercase-jira-ticket}/{kebab-case-description}`. The `kz` prefix stands for "Klajdi Ziaj".
 
 <example>
-git switch -c th/da-3780/create-snowflake-us-west-tf-workspace
+git switch -c kz/da-3780/create-snowflake-us-west-tf-workspace
 </example>
 
 ---
@@ -28,7 +28,7 @@ Before committing, you MUST run the changes locally to ensure they work correctl
 
 <example>
 git commit -m "[DA-3780] Create Snowflake us-west Terraform workspace"
-git push -u origin th/da-3780/create-snowflake-us-west-tf-workspace
+git push -u origin kz/da-3780/create-snowflake-us-west-tf-workspace
 </example>
 
 ---
@@ -98,6 +98,31 @@ When the user asks for their tickets, you MUST use the `acli jira workitem searc
 
 <example>
 acli jira workitem search --jql "project IN ('DA', 'DE') AND assignee='Klajdi Ziaj' AND status NOT IN (Done, Backlog)"
+</example>
+
+---
+
+## Managing Placeholder Tickets (DA-TBD)
+
+When creating PRs during exploratory work, you may use placeholder ticket IDs like `DA-TBD-1`, `DA-TBD-2`. These MUST be replaced with real Jira tickets before merging.
+
+**Workflow:**
+1. After completing work, create real Jira ticket with full context
+2. Update PR title with real ticket ID using `gh pr edit`
+
+<example>
+# Create Jira ticket with PR context
+acli jira workitem create \
+  --summary "Create verified corporation ARR models" \
+  --project "DA" \
+  --type "Task" \
+  --description "Full description including PR link, changes made, and impact..." \
+  --assignee "@me"
+
+# Returns: DA-4135
+
+# Update PR title
+gh pr edit 9107 --title "[DA-4135] Create verified corporation ARR models"
 </example>
 
 # Snowflake Data Warehouse Query Tool
@@ -205,6 +230,9 @@ poetry run dbt parse
 
 # Check for required tests
 poetry run pre-commit run check-model-has-tests-by-name --all-files
+
+# Validate timestamp naming (base models only)
+validate-timestamp-naming --directory models/models_verified/base
 ```
 
 ## 3. Check All Downstream References
@@ -246,5 +274,69 @@ models:
 - ❌ Broken references after renaming models
 - ❌ YAML files not matching SQL filenames
 - ❌ Compilation errors from incorrect `ref()` calls
+
+## 6. Run CI Checks Locally Before Pushing
+
+**ALWAYS run these CI checks before pushing verified model changes:**
+
+```bash
+# Critical: Check verified models don't reference scratch models
+poetry run python ./scripts/verified_models_reference_check.py --files models/models_verified/path/to/model.sql
+
+# Run for all changed verified models:
+poetry run python ./scripts/verified_models_reference_check.py --files $(git diff --name-only main | grep "models_verified.*\\.sql$" | tr '\\n' ' ')
+```
+
+**Why this matters:** The `check-verified-model-references` CI check will fail if ANY verified model references a scratch model. Running this locally catches violations before pushing.
+
+**Common violations:**
+- Verified model references `core_fct_subscription_arr_scratch` instead of `transform_temporal_corporations_subscription_arr`
+- Verified model references `base_google_sheets_arr_manual_override_scratch` instead of `base_google_sheets_arr_manual_override`
+
+**Fix:** Update the `ref()` calls in your verified models to reference only verified models or sources.
+
+## 7. Manual Migration When Commands Fail
+
+If `migrate-model-to-scratch` fails, use manual approach:
+
+**Step 1: Rename with git mv**
+```bash
+git mv models/models_scratch/path/old_model.sql models/models_scratch/path/old_model_scratch.sql
+```
+
+**Step 2: Add alias to preserve table name**
+Edit the file and update config block:
+```sql
+{{
+  config(
+    alias='old_model',  -- Add this line
+    materialized='table'
+  )
+}}
+```
+
+**Step 3: Create verified version**
+Create new file in `models/models_verified/` with:
+- Clean production name (no _scratch suffix)
+- Explicit column lists (no SELECT *)
+- Proper config for layer
+
+**Step 4: Update downstream refs**
+```bash
+# Find all references
+grep -r "ref('old_model')" models/
+
+# Update scratch models to reference _scratch version
+# Update verified models to reference verified version
+```
+
+**Step 5: Validate**
+```bash
+# Compile to check syntax
+poetry run dbt parse
+
+# Run CI check for verified models
+poetry run python ./scripts/verified_models_reference_check.py --files models/models_verified/path/to/new_model.sql
+```
 
 ---
