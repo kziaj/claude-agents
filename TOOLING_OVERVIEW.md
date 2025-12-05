@@ -1,6 +1,6 @@
 # dbt Refactor Tooling Overview
 
-**Last Updated**: 2025-01-13  
+**Last Updated**: 2025-12-05  
 **Purpose**: Executive summary of all agents, skills, and commands supporting the dbt refactor initiative
 
 ---
@@ -29,23 +29,26 @@ Executes SQL queries for data validation, schema exploration, and quality checks
 
 ---
 
-### SKILLS (4)
+### SKILLS (5)
 
 **1. dbt-refactor-standards**  
 Reference documentation of layer architecture, naming conventions, and verified/ requirements that all refactored models must follow to meet production quality standards.
 
-**2. timestamp-naming-standards**  
+**2. verified-pre-commit** ⭐ NEW  
+Comprehensive 6-step validation workflow for verified models including syntax checks, layer dependencies, and reference validation to catch all CI failures locally before pushing.
+
+**3. timestamp-naming-standards**  
 Defines the `_at` suffix convention for timestamp columns in base models to eliminate ambiguity and ensure consistency across all refactored verified/ models.
 
-**3. cortex-ai-platform**  
+**4. cortex-ai-platform**  
 Comprehensive reference for building AI features on top of refactored models using Snowflake's Cortex capabilities to unlock advanced analytics use cases.
 
-**4. data-quality-validation-patterns**  
+**5. data-quality-validation-patterns**  
 Reusable SQL patterns for validating data consistency between scratch/ and verified/ versions during migration to ensure no data quality regressions.
 
 ---
 
-### COMMANDS (8)
+### COMMANDS (11)
 
 **1. validate-timestamp-naming**  
 Scans base models to detect timestamp columns missing `_at` suffix and prevents violations from reaching production during the refactor migration.
@@ -53,22 +56,31 @@ Scans base models to detect timestamp columns missing `_at` suffix and prevents 
 **2. validate-verified-standards**  
 Comprehensive pre-commit checker that catches alias configs, SELECT *, missing YAML, and other violations before they block the refactor pipeline.
 
-**3. analyze-unused-columns**  
+**3. validate-layer-dependencies** ⭐ NEW  
+Enforces layer hierarchy rules (mart → core only) and catches backwards dependencies to ensure proper medallion architecture in verified/ models.
+
+**4. check-verified-references** ⭐ NEW  
+Ensures verified/ models don't reference scratch/ models to maintain domain separation and prevent unstable production dependencies during gradual migration.
+
+**5. analyze-unused-columns**  
 Identifies unused columns in models through downstream analysis and query history to safely remove technical debt during refactor cleanup.
 
-**4. bulk-model-rename**  
+**6. bulk-model-rename**  
 Pattern-based renaming tool that updates SQL files, YAML files, and all downstream references atomically to accelerate large-scale refactor migrations.
 
-**5. compare-model-data**  
+**7. compare-model-data**  
 Row-by-row comparison between scratch/ and verified/ versions with match percentage reporting to validate zero data quality regression after refactoring.
 
-**6. get-column-lineage**  
+**8. find-next-migration-candidates**  
+Analyzes dbt project to identify models ready for migration based on dependency status and layer rules to prioritize next refactor batch.
+
+**9. get-column-lineage**  
 Traces column-level upstream/downstream dependencies using Snowflake metadata to understand impact before refactoring or removing columns.
 
-**7. migrate-model-to-scratch**  
+**10. migrate-model-to-scratch**  
 Automates the scratch model renaming with `_scratch` suffix and alias management to enable parallel scratch/verified coexistence during gradual migration.
 
-**8. update-yaml-metadata**  
+**11. update-yaml-metadata**  
 Bulk updates metadata fields in YAML files (e.g., total_downstream_nodes) to resolve merge conflicts or synchronize metadata across multiple files after migrations.
 
 ---
@@ -96,27 +108,30 @@ Bulk updates metadata fields in YAML files (e.g., total_downstream_nodes) to res
 
 ### Phase 4: Quality Validation
 
-10. **timestamp-naming-standards skill** → Reference for ensuring all base model timestamps use `_at` suffix
-11. **validate-timestamp-naming** → Scans base models for timestamp naming violations
-12. **validate-verified-standards** → Checks for alias configs, SELECT *, and YAML completeness
-13. **data-quality-validation-patterns skill** → Reference for writing data consistency checks
-14. **compare-model-data** → Validates scratch vs verified data matches (99%+ threshold)
+10. **verified-pre-commit skill** → Complete reference for all pre-commit validation checks
+11. **timestamp-naming-standards skill** → Reference for ensuring all base model timestamps use `_at` suffix
+12. **validate-timestamp-naming** → Scans base models for timestamp naming violations
+13. **validate-verified-standards** → Checks for alias configs, SELECT *, and YAML completeness
+14. **validate-layer-dependencies** → Enforces layer hierarchy (mart → core only, no backwards dependencies)
+15. **check-verified-references** → Ensures verified models don't reference scratch models
+16. **data-quality-validation-patterns skill** → Reference for writing data consistency checks
+17. **compare-model-data** → Validates scratch vs verified data matches (99%+ threshold)
 
 ### Phase 5: Code Review & Deployment
 
-15. **pr-agent** → Creates formatted pull request with all changes and validation results
-16. **jira-ticket-agent** → Transitions ticket to "In Review" or "Done" status
+18. **pr-agent** → Creates formatted pull request with all changes and validation results
+19. **jira-ticket-agent** → Transitions ticket to "In Review" or "Done" status
 
 ### Phase 6: Advanced Features (Optional)
 
-17. **cortex-ai-platform skill** → Reference for building AI capabilities on refactored models
-18. **snowflake-cortex-agent** → Creates semantic models and conversational agents for the domain
+20. **cortex-ai-platform skill** → Reference for building AI capabilities on refactored models
+21. **snowflake-cortex-agent** → Creates semantic models and conversational agents for the domain
 
 ---
 
 ## How They Work Together
 
-**The tools form a complete refactor pipeline: Jira tracks the work, Snowflake explores the domain, lineage/analysis tools identify what to change, migration agents execute the refactoring, validation commands catch errors, data comparison ensures correctness, PR agent packages it for review, and Cortex tools unlock AI features on the clean verified models.**
+**The tools form a complete refactor pipeline: Jira tracks the work, Snowflake explores the domain, lineage/analysis tools identify what to change, migration agents execute the refactoring, comprehensive validation commands (syntax, layer dependencies, and reference checks) catch all errors before CI, data comparison ensures correctness, PR agent packages it for review, and Cortex tools unlock AI features on the clean verified models.**
 
 ---
 

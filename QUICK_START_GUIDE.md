@@ -156,6 +156,37 @@ core_fct_revenue_daily in models_verified/core/ with:
 - Validates layer rules (CORE can only reference BASE, TRANSFORM)
 - Runs pre-commit hooks to catch issues
 
+### Step 3.5: Run Verified Model Validation
+
+**CRITICAL:** Before proceeding, validate your verified model meets all standards:
+
+```bash
+# Quick validation - run all checks at once
+validate-verified-standards && \
+validate-layer-dependencies && \
+check-verified-references && \
+poetry run dbt parse
+```
+
+**What each check does:**
+- `validate-verified-standards` → Checks syntax, style, YAML compliance (no alias, no SELECT *, descriptions)
+- `validate-layer-dependencies` → Enforces layer hierarchy (mart → core only, no backwards dependencies)
+- `check-verified-references` → Ensures verified models don't reference scratch models
+- `poetry run dbt parse` → Validates SQL compiles without errors
+
+**Expected output:**
+```
+✅ PASS All verified/ standards checks passed
+✅ PASS All layer dependencies are valid
+✅ PASS All verified models reference other verified models only
+```
+
+**If checks fail:** Fix violations before proceeding to data validation. See `~/.claude/skills/verified-pre-commit/SKILL.md` for troubleshooting.
+
+**Time:** ~30 seconds (prevents 1-2 hours of CI failures!)
+
+---
+
 ### Step 4: Validate Data Quality
 
 ```plaintext

@@ -6,14 +6,24 @@ Quick, single-purpose utilities for common dbt refactoring tasks.
 
 ## Table of Contents
 
+### Migration Commands
 1. [migrate-model-to-scratch](#1-migrate-model-to-scratch)
-2. [update-yaml-metadata](#2-update-yaml-metadata)
-3. [bulk-model-rename](#3-bulk-model-rename)
-4. [analyze-unused-columns](#4-analyze-unused-columns)
-5. [compare-model-data](#5-compare-model-data)
-6. [get-column-lineage](#6-get-column-lineage)
-7. [validate-timestamp-naming](#7-validate-timestamp-naming)
-8. [validate-verified-standards](#8-validate-verified-standards)
+2. [find-next-migration-candidates](#2-find-next-migration-candidates)
+
+### Validation Commands
+3. [validate-verified-standards](#3-validate-verified-standards)
+4. [validate-layer-dependencies](#4-validate-layer-dependencies) ⭐ NEW
+5. [check-verified-references](#5-check-verified-references) ⭐ NEW
+6. [validate-timestamp-naming](#6-validate-timestamp-naming)
+
+### Analysis Commands
+7. [analyze-unused-columns](#7-analyze-unused-columns)
+8. [get-column-lineage](#8-get-column-lineage)
+9. [compare-model-data](#9-compare-model-data)
+
+### Utility Commands
+10. [bulk-model-rename](#10-bulk-model-rename)
+11. [update-yaml-metadata](#11-update-yaml-metadata)
 
 ---
 
@@ -580,7 +590,104 @@ update-yaml-metadata '*_scratch.yml' total_downstream_nodes 301 303
 
 ---
 
+## 4. validate-layer-dependencies ⭐ NEW
+
+**Purpose**: Enforce layer dependency rules in verified models (mart → core only, no backwards dependencies).
+
+### Usage
+
+```bash
+~/.claude/commands/validate-layer-dependencies
+
+# Run from dbt project directory or auto-detects ~/carta/ds-dbt
+```
+
+### What It Does
+
+1. Parses dbt manifest.json
+2. Analyzes dependencies for all verified models
+3. Checks layer hierarchy rules:
+   - Mart models only reference core (not transform/mart)
+   - Core models don't reference mart (backwards)
+   - Transform models don't reference core/mart (backwards)
+4. Reports violations with specific file paths
+5. Provides actionable fix suggestions
+
+### Layer Hierarchy
+
+```
+base → transform → core → mart
+```
+
+**Rules:**
+- Mart → core only
+- Core → transform or base only
+- Transform → base or other transform only
+- Base → sources only
+
+### Output
+
+```
+❌ FAIL Layer dependency violation
+
+  Model: models/models_verified/mart/revenue/mart_arr_revenue.sql
+  Layer: mart
+  References: transform_temporal_zuora_arr
+  Dep Layer: transform
+  
+  Fix: Reference core_historical_zuora_arr instead
+```
+
+### When to Use
+
+✅ **Use When:**
+- Before committing verified models
+- After refactoring model dependencies
+- As part of pre-commit validation
+- Validating architecture compliance
+
+---
+
+## 5. check-verified-references ⭐ NEW
+
+**Purpose**: Ensure verified models don't reference scratch models (domain separation enforcement).
+
+### Usage
+
+```bash
+# Check changed verified models in current branch (auto-detect)
+~/.claude/commands/check-verified-references
+
+# Check specific files
+check-verified-references models/models_verified/core/arr/core_fct_zuora_arr.sql
+
+# Check all verified models (slow)
+check-verified-references --all
+```
+
+### What It Does
+
+1. Detects changed verified models (or uses specified files)
+2. Runs `scripts/verified_models_reference_check.py` from ds-dbt repo
+3. Validates no `ref()` calls reference scratch models
+4. Reports violations with actionable fixes
+
+### When to Use
+
+✅ **Use When:**
+- Before committing verified model changes
+- After updating model dependencies
+- As part of pre-commit validation
+- Migrating models to verified
+
+---
+
 ## Version History
+
+### v3.0 - December 5, 2025
+- **NEW**: `validate-layer-dependencies` - Enforce layer hierarchy rules
+- **NEW**: `check-verified-references` - Simplified wrapper for verified reference checking
+- Added verified pre-commit workflow documentation
 
 ### v2.0 - November 19, 2025
 - `migrate-model-to-scratch`: Fixed double config bug, added snapshot updates, improved timeout handling
@@ -601,5 +708,5 @@ update-yaml-metadata '*_scratch.yml' total_downstream_nodes 301 303
 ---
 
 **Maintained by**: Klajdi Ziaj  
-**Last Updated**: November 19, 2025  
+**Last Updated**: December 5, 2025  
 **Feedback**: Open issues in repo or reach out on Slack

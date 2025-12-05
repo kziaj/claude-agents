@@ -1,0 +1,183 @@
+#!/bin/bash
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m'
+
+print_header() {
+    echo -e "${PURPLE}═══════════════════════════════════════════════${NC}"
+    echo -e "${PURPLE}$1${NC}"
+    echo -e "${PURPLE}═══════════════════════════════════════════════${NC}"
+}
+
+print_check() {
+    echo -e "${BLUE}[CHECK]${NC} $1"
+}
+
+print_pass() {
+    echo -e "${GREEN}✅ PASS${NC} $1"
+}
+
+print_fail() {
+    echo -e "${RED}❌ FAIL${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠️  WARN${NC} $1"
+}
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+if [ -f "dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$(pwd)"
+elif [ -d "$HOME/ds-redshift" ] && [ -f "$HOME/ds-redshift/dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$HOME/ds-redshift"
+elif [ -d "$HOME/carta/ds-dbt" ] && [ -f "$HOME/carta/ds-dbt/dbt_project.yml" ]; then
+    DBT_PROJECT_DIR="$HOME/carta/ds-dbt"
+else
+    print_fail "Could not find dbt project. Run from project directory or ensure ~/carta/ds-dbt exists"
+    exit 1
+fi
+
+cd "$DBT_PROJECT_DIR"
+
+MANIFEST_PATH="target/manifest.json"
+FAILED_CHECKS=0
+TOTAL_CHECKS=0
+
+if [ ! -f "$MANIFEST_PATH" ]; then
+    print_info "Manifest not found. Running dbt parse..."
+    if [ -f ".env" ]; then
+        source .env
+    fi
+    
+    if ! poetry run dbt parse --quiet &>/dev/null; then
+        print_fail "dbt parse failed. Fix compilation errors first."
+        exit 1
+    fi
+fi
+
+print_header "Layer Dependency Validation"
+echo ""
+
+print_info "Reading dbt manifest..."
+
+VIOLATIONS=""
+
+extract_layer() {
+    local model_path="$1"
+    
+    if [[ "$model_path" == *"/base/"* ]]; then
+        echo "base"
+    elif [[ "$model_path" == *"/transform/"* ]]; then
+        echo "transform"
+    elif [[ "$model_path" =~ /core/(dim|fct)/ ]]; then
+        echo "core"
+    elif [[ "$model_path" == *"/mart/"* ]] || [[ "$model_path" =~ /core/[^/]+\.sql$ ]]; then
+        echo "mart"
+    else
+        echo "unknown"
+    fi
+}
+
+while IFS= read -r model_entry; do
+    model_name=$(echo "$model_entry" | jq -r '.name')
+    model_path=$(echo "$model_entry" | jq -r '.original_file_path')
+    depends_on=$(echo "$model_entry" | jq -r '.depends_on.nodes[]' 2>/dev/null || echo "")
+    
+    if [[ ! "$model_path" =~ models/models_verified/ ]]; then
+        continue
+    fi
+    
+    model_layer=$(extract_layer "$model_path")
+    
+    if [ "$model_layer" == "unknown" ]; then
+        continue
+    fi
+    
+    for dep in $depends_on; do
+        if [[ "$dep" != model.* ]]; then
+            continue
+        fi
+        
+        dep_name="${dep#model.*.}"
+        dep_entry=$(jq -r ".nodes[\"$dep\"] // empty" "$MANIFEST_PATH")
+        
+        if [ -z "$dep_entry" ]; then
+            continue
+        fi
+        
+        dep_path=$(echo "$dep_entry" | jq -r '.original_file_path')
+        dep_layer=$(extract_layer "$dep_path")
+        
+        violation=""
+        
+        case "$model_layer" in
+            "mart")
+                if [ "$dep_layer" == "transform" ]; then
+                    violation="Mart model references transform layer (should only reference core)"
+                elif [ "$dep_layer" == "mart" ]; then
+                    violation="Mart model references another mart (should only reference core)"
+                fi
+                ;;
+            "core")
+                if [ "$dep_layer" == "mart" ]; then
+                    violation="Core model references mart layer (backwards dependency)"
+                fi
+                ;;
+            "transform")
+                if [ "$dep_layer" == "core" ]; then
+                    violation="Transform model references core layer (backwards dependency)"
+                elif [ "$dep_layer" == "mart" ]; then
+                    violation="Transform model references mart layer (backwards dependency)"
+                fi
+                ;;
+        esac
+        
+        if [ -n "$violation" ]; then
+            FAILED_CHECKS=$((FAILED_CHECKS + 1))
+            VIOLATIONS="${VIOLATIONS}\n\n❌ ${violation}\n"
+            VIOLATIONS="${VIOLATIONS}  Model: ${model_path}\n"
+            VIOLATIONS="${VIOLATIONS}  Layer: ${model_layer}\n"
+            VIOLATIONS="${VIOLATIONS}  References: ${dep_name}\n"
+            VIOLATIONS="${VIOLATIONS}  Dep Layer: ${dep_layer}\n"
+            VIOLATIONS="${VIOLATIONS}  Dep Path: ${dep_path}"
+        fi
+    done
+    
+    TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+    
+done < <(jq -c '.nodes[] | select(.resource_type == "model")' "$MANIFEST_PATH")
+
+echo ""
+print_header "Validation Results"
+echo ""
+
+if [ $FAILED_CHECKS -eq 0 ]; then
+    print_pass "All layer dependencies are valid!"
+    echo ""
+    echo "Checked $TOTAL_CHECKS models - all follow layer hierarchy:"
+    echo "  base → transform → core → mart"
+    echo ""
+    echo "✅ Layer dependencies are correct."
+    exit 0
+else
+    print_fail "Found $FAILED_CHECKS layer dependency violation(s)"
+    echo -e "$VIOLATIONS"
+    echo ""
+    echo "Layer hierarchy rules:"
+    echo "  • Mart models → must only reference core models"
+    echo "  • Core models → can reference transform or base"
+    echo "  • Transform models → can reference base or other transform"
+    echo "  • Base models → only reference sources"
+    echo ""
+    echo "Fix: Update model references to follow layer hierarchy."
+    exit 1
+fi

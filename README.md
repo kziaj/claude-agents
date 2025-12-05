@@ -274,6 +274,22 @@ Skills are reference documentation that Claude Code uses as context.
 
 ---
 
+### 3. **verified-pre-commit** ⭐ NEW
+*Complete validation workflow for verified/ models*
+
+**Contains:**
+- 6-step pre-commit validation checklist
+- All validation commands in one workflow
+- Troubleshooting guide for common issues
+- Quick reference for all validation checks
+- Fast-track script for running all checks
+
+**When to Reference:** Before committing any verified/ model changes
+
+📂 [Browse Skill](./skills/verified-pre-commit/)
+
+---
+
 ## Commands
 
 Commands are quick, single-purpose utilities for common tasks.

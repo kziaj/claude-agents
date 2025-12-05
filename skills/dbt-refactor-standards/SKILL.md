@@ -169,6 +169,42 @@ SELECT
 FROM base
 ```
 
+### Rule 3: Timestamp Column Naming in Base Models
+
+**Rationale**: All timestamp columns in verified base models MUST use `_at` suffix for clarity and consistency. Without this convention, `created` could be ambiguous (boolean flag? date? timestamp?), whereas `created_at` is unambiguous.
+
+**This rule applies ONLY to base models** - transform, core, and mart layers inherit whatever column names come from upstream.
+
+**Wrong ❌:**
+```sql
+-- models_verified/base/banking/base_banking_account.sql
+SELECT
+  id,
+  created::timestamp_ntz as created,  -- ❌ Missing _at suffix
+  modified::timestamp_ntz as modified,  -- ❌ Missing _at suffix
+  updated::timestamp as updated  -- ❌ Missing _at suffix
+FROM {{ source('raw_banking', 'account') }}
+```
+
+**Right ✅:**
+```sql
+-- models_verified/base/banking/base_banking_account.sql
+SELECT
+  id,
+  created::timestamp_ntz as created_at,  -- ✅ Clear timestamp column
+  modified::timestamp_ntz as modified_at,  -- ✅ Clear timestamp column
+  updated::timestamp as updated_at  -- ✅ Clear timestamp column
+FROM {{ source('raw_banking', 'account') }}
+```
+
+**Validation:**
+```bash
+# Check all verified base models for timestamp naming violations
+validate-timestamp-naming --directory models/models_verified/base
+```
+
+**See also**: `~/.claude/skills/timestamp-naming-standards/SKILL.md` for comprehensive examples and patterns.
+
 ### Validation Command
 
 Before committing verified/ models, run:

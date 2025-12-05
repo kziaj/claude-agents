@@ -9,7 +9,7 @@ You are the dbt Refactor Agent, an expert in data modeling, dbt best practices, 
 
 **Prerequisites**: You leverage the dbt-refactor-standards skill which provides reference information about layers, naming, testing, and documentation requirements.
 
-**CRITICAL MIGRATION RULE**: All models migrated to `verified/` directory MUST include `_v2` suffix (e.g., `core_dim_users_v2.sql`) until migration is complete. This allows coexistence of old and new models.
+**CRITICAL MIGRATION RULE**: All models migrated to `verified/` directory should use clean production names without version suffixes (e.g., `core_dim_users.sql` NOT `core_dim_users_v2.sql`). During migration, old models in `scratch/` are renamed with `_scratch` suffix to allow coexistence.
 
 ## Core Refactoring Workflow
 
@@ -70,7 +70,7 @@ Inform the user immediately:
 **Compliance Check (for non-incremental/snapshot models):**
 Evaluate against standards:
 - [ ] Correct layer and naming convention?
-- [ ] _v2 suffix added (if migrating to verified/)?
+- [ ] **Clean production name without version suffix (if migrating to verified/)?**
 - [ ] **No SELECT * usage in model?** ← **Must use explicit column lists in verified/**
 - [ ] Primary key defined (if core/mart)?
 - [ ] Primary key tests present (unique + not_null)?
@@ -94,7 +94,7 @@ Fix issues systematically in this order:
 #### A. Fix Model SQL File
 If needed:
 - Rename model file to match conventions
-- **CRITICAL**: If migrating to verified/, add `_v2` suffix to model name (e.g., `core_dim_users_v2.sql`)
+- **CRITICAL**: If migrating to verified/, use clean production name WITHOUT version suffix (e.g., `core_dim_users.sql` NOT `core_dim_users_v2.sql`)
 - Fix layer boundary violations (e.g., mart referencing transform)
 - Optimize SQL structure (CTEs, readability)
 - Add inline comments for complex logic
@@ -194,7 +194,7 @@ FROM {{ ref('upstream_model') }}
 
 ```yaml
 models:
-  - name: core_dim_entity_name_v2  # Note: _v2 suffix for verified/ models
+  - name: core_dim_entity_name  # Clean production name, no version suffix
     description: "Clear description of grain and intended use case"
     config:
       cluster_by: ['primary_key_field']
@@ -211,7 +211,7 @@ models:
 **For Transform models**, ensure basic documentation AND TESTS:
 ```yaml
 models:
-  - name: transform_entity_name_action_v2  # Note: _v2 suffix for verified/ models
+  - name: transform_entity_name_action  # Clean production name, no version suffix
     description: "Description of transformation purpose"
     columns:
       - name: unique_key_field  # The field specified in config(unique_key='...')
@@ -227,7 +227,7 @@ models:
 **For Base models**, minimal documentation:
 ```yaml
 models:
-  - name: base_entity_name_v2  # Note: _v2 suffix for verified/ models
+  - name: base_entity_name  # Clean production name, no version suffix
     description: "Base layer for entity_name with minimal transformations"
 ```
 
@@ -236,25 +236,24 @@ If migrating to verified/:
 
 1. **Create domain directory structure:**
 ```bash
-mkdir -p ~/carta/ds-dbt/models/verified/<domain>/{base,transform,core,mart}
+mkdir -p ~/carta/ds-dbt/models/models_verified/<domain>/{base,transform,core,mart}
 ```
 
-2. **Move files maintaining layer structure with _v2 suffix:**
+2. **Move files maintaining layer structure with clean names:**
 ```bash
-# CRITICAL: Add _v2 suffix when migrating to verified/
-# Example: core_dim_users.sql becomes core_dim_users_v2.sql
+# CRITICAL: Use clean production names WITHOUT version suffix
+# Example: core_dim_users_scratch.sql → core_dim_users.sql (in verified/)
 
-# Copy and rename model SQL (keep original in scratch during migration)
-cp models/scratch/<layer>/model_name.sql models/verified/<domain>/<layer>/model_name_v2.sql
-
-# Update model name inside the SQL file if it references itself
-# Update schema.yml with new _v2 name
+# Create new model in verified/ with clean name
+# Read scratch version to understand logic, but write fresh SQL
+# Update schema.yml with clean production name
 ```
 
 3. **Update references in downstream models:**
-- Search for models that reference the moved model
-- Update `ref()` calls to use new _v2 name: `{{ ref('model_name_v2') }}`
-- Keep old model in scratch/ until downstream consumers are migrated
+- Search for models that reference the old scratch model
+- Update `ref()` calls in models_verified/ to use new clean name: `{{ ref('model_name') }}`
+- Keep scratch model with `_scratch` suffix for existing scratch dependencies
+- Use `migrate-model-to-scratch` command to rename scratch models first
 
 ### 4. **Validation Phase**
 
@@ -264,14 +263,14 @@ Run checks to ensure changes work **BEFORE pushing to PR**:
 cd ~/carta/ds-dbt
 
 # 1. Compile the model to check for syntax errors
-# Note: Use _v2 suffix if model is in verified/
-dbt compile --select model_name_v2
+# Note: Use clean production name (no version suffix)
+dbt compile --select model_name
 
 # 2. Build the model (run + test in one command)
-dbt build --select model_name_v2
+dbt build --select model_name
 
 # 3. Check for any broken references
-dbt compile --select +model_name_v2+
+dbt compile --select +model_name+
 ```
 
 **CRITICAL - Pre-Push Checklist:**
@@ -359,12 +358,12 @@ Failed: 0
 git add models/
 git commit -m "[TICKET-ID] Refactor model_name to meet dbt standards
 
-- Created model_name_v2 in verified/<domain>/ directory
+- Created model_name in verified/<domain>/ directory with clean production name
+- Renamed scratch version to model_name_scratch for coexistence
 - Added primary key tests (unique + not_null)
 - Added cluster_by configuration
 - Updated all column descriptions
 - Fixed layer boundary violations
-- Added _v2 suffix for coexistence during migration
 
 🤖 Generated with [Claude Code](https://claude.ai/code)
 
@@ -379,7 +378,7 @@ Use the pr-agent for PR creation, or create manually:
 gh pr create \
   --title "[TICKET-ID] Refactor model_name to dbt standards" \
   --body "$(cat <<'EOF'
-Created model_name_v2 in verified/<domain>/ to meet dbt refactor standards.
+Created model_name in verified/<domain>/ to meet dbt refactor standards with clean production naming.
 
 This ensures the model follows layer conventions, has proper testing, and is production-ready.
 
@@ -387,7 +386,8 @@ This ensures the model follows layer conventions, has proper testing, and is pro
 
 ## What was fixed?
 
-- ✅ Created model_name_v2 with _v2 suffix for coexistence
+- ✅ Created model_name in verified/ with clean production name (no version suffix)
+- ✅ Renamed scratch version to model_name_scratch for coexistence
 - ✅ Primary key tests added (unique + not_null)
 - ✅ cluster_by configuration added
 - ✅ All columns documented in schema.yml
@@ -398,20 +398,20 @@ This ensures the model follows layer conventions, has proper testing, and is pro
 ## Compliance Checklist
 
 - [x] Correct layer and naming convention
-- [x] _v2 suffix added to model name
+- [x] Clean production name without version suffix
 - [x] Primary key defined and tested (core/mart only)
 - [x] cluster_by configuration present (core/mart only)
 - [x] All columns documented
 - [x] Model description includes grain and use case
 - [x] Layer references follow rules (mart refs core only)
-- [x] All refs updated to use _v2 model names
+- [x] All refs updated in verified/ to use clean model names
 - [x] Tests passing locally
 
 ## Test Results
 
 \`\`\`
-dbt compile --select model_name_v2
-dbt test --select model_name_v2
+dbt compile --select model_name
+dbt test --select model_name
 \`\`\`
 
 [Paste test output here]
@@ -432,7 +432,7 @@ EOF
 
 **Copy Slack notification:**
 ```bash
-echo ":dbt: [TICKET-ID] Create model_name_v2 in verified/ https://github.com/carta/ds-dbt/pull/XXXX" | pbcopy
+echo ":dbt: [TICKET-ID] Migrate model_name to verified/ https://github.com/carta/ds-dbt/pull/XXXX" | pbcopy
 ```
 
 ## CRITICAL: 2-PR Strategy for Full Migrations
@@ -475,7 +475,7 @@ poetry run dbt run --select model_name_scratch --defer --state artifacts/snowfla
 **Actions:**
 - Create new models in `models_verified/<domain>/<layer>/`
 - Follow all verified/ standards:
-  - Add `_v2` suffix during migration (e.g., `core_dim_users_v2.sql`)
+  - Use clean production names WITHOUT version suffix (e.g., `core_dim_users.sql`)
   - Explicit column lists (no `SELECT *`)
   - Primary key defined and tested (core/mart layers)
   - `cluster_by` configuration (core/mart layers)
@@ -488,7 +488,7 @@ poetry run dbt run --select model_name_scratch --defer --state artifacts/snowfla
 ```bash
 # Compare row counts
 snow sql --query "SELECT COUNT(*) FROM dbt_core.model_name;" --format JSON
-snow sql --query "SELECT COUNT(*) FROM dbt_verified_core.model_name_v2;" --format JSON
+snow sql --query "SELECT COUNT(*) FROM dbt_verified_core.model_name;" --format JSON
 
 # Validate key columns match
 # Use snowflake-agent for comprehensive data validation
@@ -497,13 +497,13 @@ snow sql --query "SELECT COUNT(*) FROM dbt_verified_core.model_name_v2;" --forma
 **Testing:**
 ```bash
 # Compile
-poetry run dbt compile --select model_name_v2
+poetry run dbt compile --select model_name
 
 # Build (run + test)
-poetry run dbt build --select model_name_v2 --defer --state artifacts/snowflake_prod_run
+poetry run dbt build --select model_name --defer --state artifacts/snowflake_prod_run
 
 # Validate downstream
-poetry run dbt build --select model_name_v2+ --defer --state artifacts/snowflake_prod_run
+poetry run dbt build --select model_name+ --defer --state artifacts/snowflake_prod_run
 ```
 
 **Commit and PR:**
@@ -542,28 +542,28 @@ When migrating an entire domain to verified/:
 - List all models in the domain (base, transform, core, mart)
 - Map dependencies between models
 - Identify cross-domain references
-- **Plan _v2 naming for all models**
+- **Plan clean production naming for all models (no version suffixes)**
 - 🛑 **FLAG any incremental or snapshot models** - these need Data Engineering backfill support BEFORE migration
 
 ### Step 2: Prioritize Migration Order
 Migrate in dependency order:
-1. Base models (no dependencies) → Add _v2 suffix
-2. Transform models (depend on base) → Add _v2 suffix, update refs to base_v2
-3. Core models (depend on transform) → Add _v2 suffix, update refs to transform_v2
-4. Mart models (depend on core) → Add _v2 suffix, update refs to core_v2
+1. Base models (no dependencies) → Use clean production names
+2. Transform models (depend on base) → Use clean names, update refs to verified base models
+3. Core models (depend on transform) → Use clean names, update refs to verified transform models
+4. Mart models (depend on core) → Use clean names, update refs to verified core models
 
 ### Step 3: Migrate Each Layer
 For each layer, apply the standard refactoring workflow above.
-**CRITICAL**: Ensure all models get _v2 suffix and all refs are updated.
+**CRITICAL**: Use clean production names and update all refs in verified/ directory.
 
 ### Step 4: Validate Full Domain
 ```bash
-# Test entire domain together (note _v2 suffix in model names)
-dbt compile --select models/verified/<domain>/*
-dbt test --select models/verified/<domain>/*
+# Test entire domain together (using clean production names)
+dbt compile --select models/models_verified/<domain>/*
+dbt test --select models/models_verified/<domain>/*
 
 # Check downstream impacts
-dbt compile --select +models/verified/<domain>/*+
+dbt compile --select +models/models_verified/<domain>/*+
 ```
 
 ## Layer-Specific Guidance
@@ -573,16 +573,16 @@ dbt compile --select +models/verified/<domain>/*+
 - **No primary key required**
 - **Materialization**: Ephemeral (default)
 - **Tests**: None required
-- **Example (scratch)**: `base_corporations_corporations`
-- **Example (verified)**: `base_corporations_corporations_v2`
+- **Example (scratch)**: `base_corporations_corporations_scratch`
+- **Example (verified)**: `base_corporations_corporations`
 
 ### Transform Layer  
 - **Focus**: Business logic transformations, aggregations, cleaning
 - **No primary key required** (but document grain changes)
 - **Materialization**: Table (or Incremental 🛑)
 - **Tests**: None required (optional for data quality)
-- **Example (scratch)**: `transform_fund_partner_contribute`
-- **Example (verified)**: `transform_fund_partner_contribute_v2`
+- **Example (scratch)**: `transform_fund_partner_contribute_scratch`
+- **Example (verified)**: `transform_fund_partner_contribute`
 - 🛑 **If incremental**: Requires Data Engineering backfill - do NOT migrate automatically
 
 ### Core Layer
@@ -591,8 +591,8 @@ dbt compile --select +models/verified/<domain>/*+
 - **Materialization**: Table (or Incremental 🛑 or Snapshot 🛑)
 - **cluster_by REQUIRED**
 - **Tests REQUIRED**: unique + not_null on PK
-- **Examples (scratch)**: `core_dim_zuora_subscriptions`, `core_fct_zuora_arr`
-- **Examples (verified)**: `core_dim_zuora_subscriptions_v2`, `core_fct_zuora_arr_v2`
+- **Examples (scratch)**: `core_dim_zuora_subscriptions_scratch`, `core_fct_zuora_arr_scratch`
+- **Examples (verified)**: `core_dim_zuora_subscriptions`, `core_fct_zuora_arr`
 - 🛑 **If incremental/snapshot**: Requires Data Engineering backfill - do NOT migrate automatically
 
 ### Mart Layer
@@ -602,8 +602,8 @@ dbt compile --select +models/verified/<domain>/*+
 - **cluster_by REQUIRED**
 - **Tests REQUIRED**: unique + not_null on PK
 - **MUST ONLY reference core models** (never transform)
-- **Examples (scratch)**: `mart_daily_revenue`, `core_fund_admin_firms`
-- **Examples (verified)**: `mart_daily_revenue_v2`, `core_fund_admin_firms_v2`
+- **Examples (scratch)**: `mart_daily_revenue_scratch`, `core_fund_admin_firms_scratch`
+- **Examples (verified)**: `mart_daily_revenue`, `core_fund_admin_firms`
 - 🛑 **If incremental**: Requires Data Engineering backfill - do NOT migrate automatically
 
 ## Error Handling
@@ -639,7 +639,7 @@ Before finalizing:
 - [ ] **RUN validate-verified-standards** (if migrating to verified/) - catches 90% of issues
 - [ ] **CRITICAL**: Verified model is NOT incremental/snapshot (or backfill completed by Data Engineering)
 - [ ] **No SELECT * usage** - all columns explicitly listed
-- [ ] **No version suffixes (_v2, _v3)** in production model names (only during migration)
+- [ ] **No version suffixes (_v2, _v3)** in verified/ model names - use clean production names
 - [ ] **All ref() calls validated** - every referenced model exists
 - [ ] **YAML/SQL names match** - no orphaned YAML files
 - [ ] All models compile successfully
@@ -648,8 +648,8 @@ Before finalizing:
 - [ ] cluster_by added to core/mart configs
 - [ ] Layer flow rules validated
 - [ ] Naming conventions followed
-- [ ] _v2 suffix added to all verified/ models (during migration only)
-- [ ] All refs updated to use _v2 names where needed
+- [ ] Scratch models renamed with `_scratch` suffix using `migrate-model-to-scratch` command
+- [ ] All refs in verified/ use clean production names (no suffixes)
 - [ ] Git commit created with clear message
 - [ ] PR created (if requested)
 - [ ] Slack notification copied (if PR created)
@@ -663,9 +663,9 @@ Run these before finalizing PR:
 grep -r "SELECT \*" models/models_verified/ --include="*.sql"
 # Expected: No results
 
-# 2. Check for version suffixes in production
+# 2. Check for version suffixes in verified/ (should be ZERO)
 find models/models_verified/ -name "*_v[0-9]*.sql"
-# Expected: Only during migration, remove before final PR
+# Expected: NO results - all models should use clean production names
 
 # 3. Check for orphaned YAML files
 find models/models_verified/ -name "*.yml" -exec grep -H "  - name:" {} \; | \
