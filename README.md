@@ -571,12 +571,54 @@ Open an issue with:
 
 ---
 
+## Maintenance & Cleanup
+
+### Automated Cleanup Script
+
+Run the cleanup script monthly to keep your `.claude` directory tidy:
+
+```bash
+# Preview what will be cleaned up (dry run)
+~/.claude/scripts/cleanup.sh --dry-run
+
+# Actually perform cleanup
+~/.claude/scripts/cleanup.sh
+```
+
+**What it cleans:**
+- Conversation history older than 21 days (archived to `projects/archive/`)
+- Shell snapshots older than 14 days
+- Todo files older than 14 days
+- .DS_Store files
+- Session context files from previous months (archived to `session-context/archive/`)
+- Result files older than 90 days (archived to `results/archive/`)
+
+### Manual Maintenance Tasks
+
+**Monthly:**
+- Run `~/.claude/scripts/cleanup.sh` to clean up artifacts
+- Review and archive completed session context files
+- Check `projects/` directory size - should stay under 50MB
+
+**Quarterly:**
+- Review and delete old archived files if no longer needed
+- Check for duplicate or obsolete commands in `commands/`
+- Update documentation if workflows have changed
+
+**As Needed:**
+- Remove .DS_Store files: `find ~/.claude -name ".DS_Store" -delete`
+- Check directory size: `du -sh ~/.claude`
+- Commit new tools/documentation to git
+
+---
+
 ## Resources
 
 ### Internal Documentation
 - [dbt Refactor Standards Skill](./skills/dbt-refactor-standards/)
 - [Cortex AI Platform Skill](./skills/cortex-ai-platform/)
 - [Migration Plans](./prompt_md/)
+- [Session Context Guide](./session-context/README.md)
 
 ### External Resources
 - [dbt Documentation](https://docs.getdbt.com/)
@@ -592,7 +634,7 @@ MIT License - See [LICENSE](./LICENSE) for details
 ---
 
 **Created by:** Klajdi Ziaj  
-**Updated:** November 2025  
+**Updated:** January 2026  
 **Status:** Production-ready and actively maintained
 
 For questions or suggestions: Open an issue or reach out on Slack (@klajdi)
