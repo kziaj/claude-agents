@@ -290,6 +290,39 @@ Skills are reference documentation that Claude Code uses as context.
 
 ---
 
+### 4. **metabase-api** ⭐ NEW
+*Metabase API integration via Playwright MCP*
+
+**Contains:**
+- Querying existing Metabase questions
+- Creating new cards programmatically
+- Exporting data to CSV/JSON
+- Session management via browser automation
+- Complete setup guide with Playwright MCP
+
+**When to Reference:** Working with Metabase dashboards and analytics
+
+📂 [Browse Skill](./skills/metabase-api/)  
+📄 [Setup Guide](./docs/metabase-mcp-setup.md)
+
+---
+
+### 5. **looker-migration**
+*Looker view migration from scratch to verified schemas*
+
+**Contains:**
+- Schema comparison tools
+- LookML field validation workflows
+- Reference scanning across directories
+- Atomic migration patterns
+- Column mapping documentation
+
+**When to Reference:** Migrating Looker views to verified dbt schemas
+
+📂 [Browse Skill](./skills/looker-migration/)
+
+---
+
 ## Commands
 
 Commands are quick, single-purpose utilities for common tasks.

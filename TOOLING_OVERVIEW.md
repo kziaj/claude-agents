@@ -1,6 +1,6 @@
 # dbt Refactor Tooling Overview
 
-**Last Updated**: 2025-12-05  
+**Last Updated**: 2026-01-06  
 **Purpose**: Executive summary of all agents, skills, and commands supporting the dbt refactor initiative
 
 ---
@@ -29,7 +29,7 @@ Executes SQL queries for data validation, schema exploration, and quality checks
 
 ---
 
-### SKILLS (5)
+### SKILLS (7)
 
 **1. dbt-refactor-standards**  
 Reference documentation of layer architecture, naming conventions, and verified/ requirements that all refactored models must follow to meet production quality standards.
@@ -45,6 +45,12 @@ Comprehensive reference for building AI features on top of refactored models usi
 
 **5. data-quality-validation-patterns**  
 Reusable SQL patterns for validating data consistency between scratch/ and verified/ versions during migration to ensure no data quality regressions.
+
+**6. metabase-api** ⭐ NEW  
+Metabase API integration workflows via Playwright MCP for querying existing questions, creating new cards programmatically, and exporting data to CSV/JSON with automated session management.
+
+**7. looker-migration**  
+Looker view migration tooling from scratch to verified schemas including schema comparison, LookML field validation, reference scanning, and atomic migration patterns.
 
 ---
 
