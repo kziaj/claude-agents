@@ -12,7 +12,30 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "current_dir=$(pwd); base_dir=$(basename \"$current_dir\"); git_branch=$(git branch --show-current 2>/dev/null); kube_context=$(kubectl config current-context 2>/dev/null | cut -d'/' -f2 2>/dev/null || echo ''); time_now=$(date '+%H:%M'); cost_report=$(bun x ccusage statusline --visual-burn-rate emoji 2>/dev/null || echo ''); if [ -n \"$git_branch\" ]; then git_info=\" on $git_branch\"; else git_info=''; fi; if [ -n \"$kube_context\" ]; then kube_info=\" [k8s:$kube_context]\"; else kube_info=''; fi; if [ -n \"$cost_report\" ]; then cost_info=\" | $cost_report\"; else cost_info=''; fi; printf \"\\033[2m%s%s%s | %s%s\\033[0m\" \"$base_dir\" \"$git_info\" \"$kube_info\" \"$time_now\" \"$cost_info\"",
-    "padding": 0
+    "command": "npx ccstatusline@latest"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "afplay /System/Library/Sounds/Glass.aiff"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/claude-notification-hook.sh 'Claude needs your input' Bottle"
+          }
+        ]
+      }
+    ]
   }
 }

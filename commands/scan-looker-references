@@ -1,0 +1,64 @@
+#!/bin/bash
+# Scan Looker directory for dbt_core/dbt_mart references
+#
+# Usage: scan-looker-references [--dir <directory>] [--schemas <comma-separated>]
+# Example: scan-looker-references --dir revenue/ --schemas dbt_core,dbt_mart
+
+set -e
+
+# Default values
+DIR="."
+SCHEMAS="dbt_core,dbt_mart"
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dir)
+            DIR="$2"
+            shift 2
+            ;;
+        --schemas)
+            SCHEMAS="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: scan-looker-references [--dir <directory>] [--schemas <comma-separated>]"
+            exit 1
+            ;;
+    esac
+done
+
+# Convert to directory in Looker repo
+LOOKER_DIR="$HOME/ds-looker-carta-analytics/views/$DIR"
+
+if [ ! -d "$LOOKER_DIR" ]; then
+    echo "❌ Directory not found: $LOOKER_DIR"
+    exit 1
+fi
+
+echo "🔍 Scanning for references in: $DIR"
+echo "📋 Looking for schemas: $SCHEMAS"
+echo ""
+
+# Convert comma-separated schemas to grep pattern
+SCHEMA_PATTERN=$(echo "$SCHEMAS" | sed 's/,/\\|/g')
+
+# Find all .lkml files with references
+cd "$LOOKER_DIR"
+
+echo "📁 Files with references:"
+grep -l "sql_table_name.*\($SCHEMA_PATTERN\)\." *.lkml 2>/dev/null | while read -r file; do
+    echo "  - $file"
+done
+echo ""
+
+echo "📊 Reference counts by model:"
+grep "sql_table_name.*\($SCHEMA_PATTERN\)\." *.lkml 2>/dev/null | \
+    sed 's/.*sql_table_name:\s*//' | \
+    sed 's/\s*;;.*//' | \
+    sort | uniq -c | sort -rn | \
+    awk '{printf "  %3d  %s\n", $1, $2}'
+
+echo ""
+echo "✅ Scan complete"

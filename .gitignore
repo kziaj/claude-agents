@@ -2,9 +2,45 @@
 shell-snapshots/
 todos/
 .DS_Store
+**/.DS_Store
 
 # Ignore local settings that shouldn't be shared
 settings.local.json
+
+# Ignore session context files (personal work notes)
+session-context/*.md
+!session-context/README.md
+!session-context/TEMPLATE.md
+!session-context/EXAMPLE*.md
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+ENV/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# Testing artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
 
 # Keep the rest
 !agents/
@@ -17,4 +53,10 @@ settings.local.json
 !README.md
 
 # Exclude conversation history - too dynamic
-projects/
+projects/-Users-*/
+projects/archive/
+
+# Temporary files
+*.tmp
+*.bak
+*.log

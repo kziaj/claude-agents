@@ -125,6 +125,18 @@ acli jira workitem create \
 gh pr edit 9107 --title "[DA-4135] Create verified corporation ARR models"
 </example>
 
+---
+
+## Jira Ticket Configuration
+
+- **Jira tickets**: When the user asks about tickets, issues, or Jira-related tasks, use the `jira-ticket` skill
+  - My Jira Projects
+    1. Data Engineering (default project)
+        * Project Key: DA
+        * Board Id: 618
+  - Variables
+    1. JIRA_ASSIGNEE_NAME=Klajdi Ziaj
+
 # Snowflake Data Warehouse Query Tool
 Use the `snow` command via the Bash tool for ALL Snowflake-related queries.
 
@@ -185,6 +197,161 @@ When asked for the latest messages in a channel, you MUST use the `conversations
 curl -H "Authorization: Bearer $SLACK_TOKEN" "https://slack.com/api/conversations.history?channel=C04L5QG5PHQ&limit=5&inclusive=true"
 </example>
 
+
+# Metabase Tool
+Use the `metabase-api` skill via the skill() function for ALL Metabase-related tasks.
+
+---
+
+### **IMPORTANT: Authentication**
+- The skill automatically retrieves your Metabase session token using Playwright MCP and Island browser
+- You MUST have Island browser open with an active Metabase session
+- No manual token extraction is required
+
+---
+
+## Querying Existing Questions
+
+When the user provides a Metabase question URL or asks to query a question:
+
+<example>
+# User provides URL: https://metabase-prod.ds.carta.rocks/question/16232
+skill(metabase-api) https://metabase-prod.ds.carta.rocks/question/16232
+</example>
+
+The skill will:
+1. Extract the card ID from the URL
+2. Retrieve your session token via Playwright MCP
+3. Execute the query and show results summary
+4. Prompt for next steps (export CSV/JSON, analyze, etc.)
+
+---
+
+## Creating New Cards
+
+**⚠️ CRITICAL: Validate SQL with snow cli First**
+
+Before creating ANY Metabase card, you MUST test the SQL query:
+
+```bash
+snow sql --query "YOUR_SQL_HERE" --format JSON
+```
+
+**Why this is MANDATORY:**
+- Catches syntax errors before card creation
+- Validates table access and Snowflake permissions
+- Ensures query performance is acceptable
+- Prevents creating broken/failing cards in Metabase
+
+**RULE: If snow cli fails, STOP and ask user to fix SQL. Do not proceed to card creation.**
+
+---
+
+When the user asks to create a Metabase card or question:
+
+<example>
+# "Create a Metabase card called 'Daily Active Users' with this SQL: SELECT..."
+Create a Metabase card called "Revenue Analysis" with SQL:
+SELECT 
+  date_trunc('month', created_date) as month,
+  sum(revenue) as total_revenue
+FROM prod_db.dbt_core.revenue
+GROUP BY 1
+ORDER BY 1 DESC
+LIMIT 12
+</example>
+
+The skill will:
+1. **VALIDATE SQL with snow cli first** (MANDATORY)
+   ```bash
+   snow sql --query "USER_PROVIDED_SQL" --format JSON
+   ```
+2. Only if validation succeeds:
+3. Retrieve your session token via Playwright MCP
+4. Find your personal collection ID: "Klajdi Ziaj's Personal Collection"
+5. Create the card with the provided SQL
+6. Return the shareable Metabase URL
+
+**If Step 1 fails, STOP and ask user to fix SQL. Do not proceed.**
+
+**Default Settings:**
+- **Collection**: "Klajdi Ziaj's Personal Collection" (automatically found)
+- **Database**: `1` (main Snowflake PROD_DB)
+- **Display Type**: `table` (unless specified otherwise)
+
+**Available Display Types:**
+- `table`: Standard table view (default)
+- `bar`: Bar chart
+- `line`: Line chart
+- `pie`: Pie chart
+- `scalar`: Single number
+- `row`: Row chart
+
+---
+
+## Exporting Data
+
+The skill supports exporting query results to:
+- **CSV**: `/tmp/<card_name>.csv`
+- **JSON**: `/tmp/<card_name>.json`
+
+After querying a card, the skill will prompt for export options.
+
+---
+
+# Looker BI Migration Tool
+
+Use the looker-migration skill and commands for migrating Looker views from scratch to verified schemas.
+
+---
+
+### **IMPORTANT: Migration Process**
+- ALWAYS generate column mappings FIRST before starting migration
+- Process one directory at a time (not entire repo)
+- Validate schema compatibility before changing sql_table_name
+
+---
+
+## Available Commands
+
+### compare-table-schemas
+Compare column schemas between scratch and verified Snowflake tables.
+
+<example>
+compare-table-schemas dbt_core.core_fct_zuora_arr dbt_verified_core.core_historical_zuora_arr
+</example>
+
+### scan-looker-references
+Scan Looker directory for scratch schema references.
+
+<example>
+scan-looker-references --dir revenue/ --schemas dbt_core,dbt_mart
+</example>
+
+### validate-lookml-fields
+Validate that LookML field references exist in target Snowflake table.
+
+<example>
+validate-lookml-fields --lookml revenue/zuora_arr.view.lkml --table dbt_verified_core.core_historical_zuora_arr
+</example>
+
+---
+
+## Migration Workflow
+
+For complete workflow documentation, see:
+- **Skill Document:** ~/.claude/skills/looker-migration/SKILL.md
+- **Quick Reference:** ~/.claude/workflows/looker-bi-migration.md
+- **Example PR:** DA-4203 (PR #1537)
+
+**Key Steps:**
+1. Generate column mappings for all table pairs
+2. Scan one directory at a time
+3. Validate schema compatibility file by file
+4. Migrate and commit directory
+5. Repeat for next directory
+
+---
 
 ### Process for Migrating LookML to Snowflake Cortex Analyst
 
@@ -295,7 +462,61 @@ poetry run python ./scripts/verified_models_reference_check.py --files $(git dif
 
 **Fix:** Update the `ref()` calls in your verified models to reference only verified models or sources.
 
-## 7. Manual Migration When Commands Fail
+## 7. Verified Model Development Workflow
+
+**CRITICAL:** Before committing models to `models_verified/`, run a comprehensive validation workflow to catch issues before CI.
+
+### Quick Validation Commands
+
+Use these new commands to validate verified models:
+
+```bash
+# 1. Check syntax, style, and YAML compliance
+validate-verified-standards
+
+# 2. Check layer dependencies (mart → core only, etc.)
+validate-layer-dependencies
+
+# 3. Check verified models don't reference scratch models
+check-verified-references
+
+# 4. All checks at once (fast track)
+validate-verified-standards && validate-layer-dependencies && check-verified-references && poetry run dbt parse
+```
+
+### Layer Dependency Rules
+
+**CRITICAL:** These rules are enforced by `validate-layer-dependencies`:
+
+- **Mart models** → MUST only reference **core** models (never transform, never other marts)
+- **Core models** → Can reference transform or base (never mart)
+- **Transform models** → Can reference base or other transform (never core/mart)
+- **Base models** → Only reference sources
+
+**Example violations:**
+```sql
+-- ❌ WRONG: Mart references transform
+SELECT * FROM {{ ref('transform_temporal_zuora_arr') }}
+
+-- ✅ CORRECT: Mart references core
+SELECT * FROM {{ ref('core_historical_zuora_arr') }}
+```
+
+### Complete Pre-Commit Checklist
+
+For a comprehensive workflow with troubleshooting, see: `~/.claude/skills/verified-pre-commit/SKILL.md`
+
+**Summary:**
+1. Syntax & style validation (`validate-verified-standards`)
+2. Layer dependency validation (`validate-layer-dependencies`)
+3. Verified reference validation (`check-verified-references`)
+4. Pre-commit hooks (descriptions, tests)
+5. Compilation & build test (`dbt parse`, `dbt build`)
+6. Data validation (if migrating from scratch)
+
+**Time investment:** 10-20 minutes of validation saves 1-2 hours of CI failures and rework.
+
+## 8. Manual Migration When Commands Fail
 
 If `migrate-model-to-scratch` fails, use manual approach:
 
@@ -340,3 +561,18 @@ poetry run python ./scripts/verified_models_reference_check.py --files models/mo
 ```
 
 ---
+
+## Session Context / Resume Work
+
+To save your work state before restarting Claude:
+```
+"Save our current session state to session-context/ - we're working on [description]"
+```
+
+To resume after restart:
+```
+"Read the latest session context file and continue where we left off"
+```
+
+See `~/.claude/session-context/README.md` for full documentation and examples.
+

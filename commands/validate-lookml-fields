@@ -1,0 +1,114 @@
+#!/bin/bash
+# Validate that LookML field references exist in target Snowflake table
+#
+# Usage: validate-lookml-fields --lookml <file> --table <schema.table>
+# Example: validate-lookml-fields --lookml revenue/zuora_arr.view.lkml --table dbt_verified_core.core_historical_zuora_arr
+
+set -e
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --lookml)
+            LOOKML_FILE="$2"
+            shift 2
+            ;;
+        --table)
+            TARGET_TABLE="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: validate-lookml-fields --lookml <file> --table <schema.table>"
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$LOOKML_FILE" ] || [ -z "$TARGET_TABLE" ]; then
+    echo "Usage: validate-lookml-fields --lookml <file> --table <schema.table>"
+    exit 1
+fi
+
+# Resolve full path
+if [[ "$LOOKML_FILE" != /* ]]; then
+    LOOKML_FILE="$HOME/ds-looker-carta-analytics/views/$LOOKML_FILE"
+fi
+
+if [ ! -f "$LOOKML_FILE" ]; then
+    echo "❌ File not found: $LOOKML_FILE"
+    exit 1
+fi
+
+echo "🔍 Validating: $(basename "$LOOKML_FILE")"
+echo "🎯 Target table: $TARGET_TABLE"
+echo ""
+
+# Extract column references from LookML (sql: ${TABLE}.column_name pattern)
+LOOKML_COLS=$(grep -o '\${TABLE}\.[A-Z_]*' "$LOOKML_FILE" 2>/dev/null | \
+    sed 's/\${TABLE}\.//' | \
+    sort -u || echo "")
+
+if [ -z "$LOOKML_COLS" ]; then
+    echo "⚠️  No column references found in LookML file"
+    exit 0
+fi
+
+LOOKML_COUNT=$(echo "$LOOKML_COLS" | wc -l | tr -d ' ')
+echo "📋 Found $LOOKML_COUNT unique column references in LookML"
+echo ""
+
+# Get columns from target table
+TARGET_COLS=$(cd ~/ds-redshift && source .env && \
+    snow sql --query "DESCRIBE TABLE prod_db.$TARGET_TABLE;" --format JSON 2>/dev/null | \
+    jq -r '.[] | .name' | sort)
+
+# Write to temp files
+LOOKML_FILE_TMP=$(mktemp)
+TARGET_FILE_TMP=$(mktemp)
+echo "$LOOKML_COLS" > "$LOOKML_FILE_TMP"
+echo "$TARGET_COLS" > "$TARGET_FILE_TMP"
+
+# Find matching columns
+MATCHING=$(comm -12 "$LOOKML_FILE_TMP" "$TARGET_FILE_TMP")
+MATCHING_COUNT=$(echo "$MATCHING" | grep -v '^$' | wc -l | tr -d ' ')
+
+# Find columns in LookML but not in target
+MISSING=$(comm -23 "$LOOKML_FILE_TMP" "$TARGET_FILE_TMP")
+MISSING_COUNT=$(echo "$MISSING" | grep -v '^$' | wc -l | tr -d ' ')
+
+echo "✅ Columns Found ($MATCHING_COUNT):"
+if [ -n "$MATCHING" ]; then
+    echo "$MATCHING" | grep -v '^$' | sed 's/^/  /'
+else
+    echo "  (none)"
+fi
+echo ""
+
+if [ "$MISSING_COUNT" -gt 0 ]; then
+    echo "❌ Columns Missing in Target ($MISSING_COUNT):"
+    echo "$MISSING" | grep -v '^$' | sed 's/^/  /'
+    echo ""
+    
+    echo "💡 Suggestions:"
+    echo "  1. Check if these columns were renamed in verified schema"
+    echo "  2. Check downstream models (e.g., core vs transform layer)"
+    echo "  3. Update LookML dimension definitions to use new column names"
+    echo ""
+    
+    # Calculate validation status
+    MATCH_PERCENT=$((MATCHING_COUNT * 100 / LOOKML_COUNT))
+    echo "📈 Validation: $MATCHING_COUNT/$LOOKML_COUNT columns found ($MATCH_PERCENT%)"
+    
+    if [ "$MATCH_PERCENT" -lt 100 ]; then
+        echo "⚠️  Manual review required before migration"
+        rm -f "$LOOKML_FILE_TMP" "$TARGET_FILE_TMP"
+        exit 1
+    fi
+else
+    echo "✨ All LookML columns exist in target table!"
+    echo "✅ Safe to migrate"
+fi
+
+# Cleanup
+rm -f "$LOOKML_FILE_TMP" "$TARGET_FILE_TMP"

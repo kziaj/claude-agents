@@ -1,0 +1,93 @@
+#!/bin/bash
+# Compare column schemas between scratch and verified Snowflake tables
+#
+# Usage: compare-table-schemas <scratch_table> <verified_table>
+# Example: compare-table-schemas dbt_core.core_fct_zuora_arr dbt_verified_core.core_historical_zuora_arr
+
+set -e
+
+if [ $# -lt 2 ]; then
+    echo "Usage: compare-table-schemas <scratch_table> <verified_table>"
+    echo "Example: compare-table-schemas dbt_core.core_fct_zuora_arr dbt_verified_core.core_historical_zuora_arr"
+    exit 1
+fi
+
+SCRATCH_TABLE="$1"
+VERIFIED_TABLE="$2"
+
+echo "🔍 Comparing schemas: $SCRATCH_TABLE vs $VERIFIED_TABLE"
+echo ""
+
+# Get columns from scratch table
+SCRATCH_COLS=$(cd ~/ds-redshift && source .env && snow sql --query "DESCRIBE TABLE prod_db.$SCRATCH_TABLE;" --format JSON 2>/dev/null | jq -r '.[] | .name' | sort)
+
+# Get columns from verified table
+VERIFIED_COLS=$(cd ~/ds-redshift && source .env && snow sql --query "DESCRIBE TABLE prod_db.$VERIFIED_TABLE;" --format JSON 2>/dev/null | jq -r '.[] | .name' | sort)
+
+# Write to temp files
+SCRATCH_FILE=$(mktemp)
+VERIFIED_FILE=$(mktemp)
+echo "$SCRATCH_COLS" > "$SCRATCH_FILE"
+echo "$VERIFIED_COLS" > "$VERIFIED_FILE"
+
+# Count columns
+SCRATCH_COUNT=$(wc -l < "$SCRATCH_FILE" | tr -d ' ')
+VERIFIED_COUNT=$(wc -l < "$VERIFIED_FILE" | tr -d ' ')
+
+echo "📊 Column Counts:"
+echo "  Scratch: $SCRATCH_COUNT columns"
+echo "  Verified: $VERIFIED_COUNT columns"
+echo ""
+
+# Find matching columns
+MATCHING=$(comm -12 "$SCRATCH_FILE" "$VERIFIED_FILE")
+MATCHING_COUNT=$(echo "$MATCHING" | grep -v '^$' | wc -l | tr -d ' ')
+
+# Find columns only in scratch
+ONLY_SCRATCH=$(comm -23 "$SCRATCH_FILE" "$VERIFIED_FILE")
+ONLY_SCRATCH_COUNT=$(echo "$ONLY_SCRATCH" | grep -v '^$' | wc -l | tr -d ' ')
+
+# Find columns only in verified
+ONLY_VERIFIED=$(comm -13 "$SCRATCH_FILE" "$VERIFIED_FILE")
+ONLY_VERIFIED_COUNT=$(echo "$ONLY_VERIFIED" | grep -v '^$' | wc -l | tr -d ' ')
+
+echo "✅ Matching Columns ($MATCHING_COUNT):"
+if [ -n "$MATCHING" ]; then
+    echo "$MATCHING" | grep -v '^$' | sed 's/^/  /'
+else
+    echo "  (none)"
+fi
+echo ""
+
+echo "⚠️  Only in Scratch ($ONLY_SCRATCH_COUNT):"
+if [ -n "$ONLY_SCRATCH" ]; then
+    echo "$ONLY_SCRATCH" | grep -v '^$' | sed 's/^/  /'
+else
+    echo "  (none)"
+fi
+echo ""
+
+echo "➕ Only in Verified ($ONLY_VERIFIED_COUNT):"
+if [ -n "$ONLY_VERIFIED" ]; then
+    echo "$ONLY_VERIFIED" | grep -v '^$' | sed 's/^/  /'
+else
+    echo "  (none)"
+fi
+echo ""
+
+# Calculate match percentage
+if [ "$SCRATCH_COUNT" -gt 0 ]; then
+    MATCH_PERCENT=$((MATCHING_COUNT * 100 / SCRATCH_COUNT))
+    echo "📈 Match Rate: $MATCHING_COUNT/$SCRATCH_COUNT ($MATCH_PERCENT%)"
+    
+    if [ "$ONLY_SCRATCH_COUNT" -eq 0 ]; then
+        echo "✨ Perfect match! All scratch columns exist in verified."
+    elif [ "$ONLY_SCRATCH_COUNT" -le 3 ]; then
+        echo "⚠️  Minor differences. Check if missing columns are used in LookML."
+    else
+        echo "❌ Significant differences. Manual review required."
+    fi
+fi
+
+# Cleanup
+rm -f "$SCRATCH_FILE" "$VERIFIED_FILE"

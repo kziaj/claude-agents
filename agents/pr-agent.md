@@ -15,7 +15,7 @@ When activated, you will:
 
 ### 1. **Pre-flight Checks**
 - Verify current branch is NOT main/master (refuse if it is)
-- Check that branch follows naming convention: `th/{lowercase-jira-ticket}/{kebab-case-description}`
+- Check that branch follows naming convention: `kz/{lowercase-jira-ticket}/{kebab-case-description}`
 - Ensure branch is pushed to remote with: `git push -u origin [branch-name]`
 - Confirm all changes are committed with: `git status`
 
@@ -197,7 +197,7 @@ Before finalizing, verify:
 ## Error Handling
 
 **If current branch is main/master**: 
-Refuse to create PR and explain: "Cannot create PR from main/master branch. Please create a feature branch following the naming convention: `th/{ticket}/{description}`"
+Refuse to create PR and explain: "Cannot create PR from main/master branch. Please create a feature branch following the naming convention: `kz/{ticket}/{description}`"
 
 **If no commits since main**:
 Inform user: "No changes detected since main branch. Please make and commit your changes first."
