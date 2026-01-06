@@ -2,12 +2,13 @@
 
 A comprehensive collection of Claude Code agents, skills, and commands designed for systematic dbt model refactoring and migration at Carta.
 
-**📚 [Quick Start Guide](./QUICK_START_GUIDE.md)** | **🔧 [Setup Instructions](#installation)** | **📖 [Lessons Learned](./QUICK_START_GUIDE.md#lessons-from-pr-9012)**
+**🎓 [New Hire Onboarding](./ONBOARDING.md)** | **📚 [Quick Start Guide](./QUICK_START_GUIDE.md)** | **🔧 [Setup Instructions](#installation)** | **📖 [Lessons Learned](./QUICK_START_GUIDE.md#lessons-from-pr-9012)**
 
 ---
 
 ## Table of Contents
 
+- [New Hire Onboarding](#new-hire-onboarding)
 - [Overview](#overview)
 - [Installation](#installation)
 - [Agents](#agents)
@@ -15,6 +16,56 @@ A comprehensive collection of Claude Code agents, skills, and commands designed 
 - [Commands](#commands)
 - [When to Use What](#when-to-use-what)
 - [Contributing](#contributing)
+
+---
+
+## New Hire Onboarding
+
+**Welcome to Analytics Engineering at Carta!** 🎉
+
+If you're setting up Claude Code for the first time, start here:
+
+### Quick Start (Day 1 - 2-3 hours)
+
+1. **Read the onboarding guide:** [`ONBOARDING.md`](./ONBOARDING.md)
+2. **Install required tools:**
+   ```bash
+   # Claude Code
+   brew install anthropic/tap/claude
+   
+   # Team tools
+   brew install gh awscli poetry snowflake-cli
+   ```
+3. **Clone this configuration:**
+   ```bash
+   git clone https://github.com/kziaj/claude-agents.git ~/.claude
+   cd ~/.claude
+   ```
+4. **Personalize your config:**
+   ```bash
+   cp CLAUDE.md.template CLAUDE.md
+   # Edit CLAUDE.md - replace {PLACEHOLDER} values
+   ```
+5. **Validate setup:**
+   ```bash
+   ~/.claude/scripts/validate-setup.sh
+   ```
+
+### Resources for New Hires
+
+- 📖 **[Complete Onboarding Guide](./ONBOARDING.md)** - Day 1 setup, Week 1 workflows, Month 1 advanced patterns
+- 📋 **[Team Conventions](./docs/team-conventions.md)** - Git workflow, Jira standards, dbt practices
+- ✅ **[Setup Validation Script](./scripts/validate-setup.sh)** - Verify your environment
+- 🎯 **[Quick Start Guide](./QUICK_START_GUIDE.md)** - Learn the tools with examples
+
+### Getting Help
+
+- **Slack:** #claude-code-users
+- **Office Hours:** Thursdays 2-3pm PT
+- **Your Onboarding Buddy:** Assigned on Day 1
+- **Issues:** [GitHub Issues](https://github.com/kziaj/claude-agents/issues)
+
+**Time to productivity:** Most new hires create their first PR within 3 days!
 
 ---
 
