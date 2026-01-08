@@ -229,60 +229,89 @@ The skill will:
 
 ## Creating New Cards
 
-**⚠️ CRITICAL: Validate SQL with snow cli First**
+**IMPORTANT: Always Prefer GUI Questions Over SQL Queries**
 
-Before creating ANY Metabase card, you MUST test the SQL query:
+Create GUI questions (MBQL) by default - they enable seamless drill-down functionality. Only fall back to SQL when absolutely necessary.
+
+**⚠️ CRITICAL: Validate Data Access with snow cli First**
+
+Before creating ANY Metabase card, you MUST validate table access:
 
 ```bash
-snow sql --query "YOUR_SQL_HERE" --format JSON
+snow sql --query "SELECT * FROM prod_db.dbt_verified_core.your_table LIMIT 10" --format JSON
 ```
 
 **Why this is MANDATORY:**
-- Catches syntax errors before card creation
 - Validates table access and Snowflake permissions
-- Ensures query performance is acceptable
-- Prevents creating broken/failing cards in Metabase
+- Confirms table and column names are correct
+- Ensures data availability
+- Prevents creating broken cards in Metabase
 
-**RULE: If snow cli fails, STOP and ask user to fix SQL. Do not proceed to card creation.**
+**RULE: If snow cli fails, STOP and ask user to fix table/column names. Do not proceed to card creation.**
 
 ---
 
-When the user asks to create a Metabase card or question:
+### Creating GUI Questions (PREFERRED)
+
+When the user asks to create a Metabase card with **simple aggregations**:
 
 <example>
-# "Create a Metabase card called 'Daily Active Users' with this SQL: SELECT..."
-Create a Metabase card called "Revenue Analysis" with SQL:
-SELECT 
-  date_trunc('month', created_date) as month,
-  sum(revenue) as total_revenue
-FROM prod_db.dbt_core.revenue
-GROUP BY 1
-ORDER BY 1 DESC
-LIMIT 12
+# "Create a bar chart showing MoM distinct approved zip requests"
+User: Create a Metabase bar chart: MoM distinct approved zip requests
+
+Assistant will:
+1. Validate data access with snow cli
+2. Look up table ID and field IDs via Metabase API
+3. Create GUI question using MBQL (Metabase Query Language)
+4. Return shareable URL
 </example>
 
-The skill will:
-1. **VALIDATE SQL with snow cli first** (MANDATORY)
-   ```bash
-   snow sql --query "USER_PROVIDED_SQL" --format JSON
-   ```
-2. Only if validation succeeds:
-3. Retrieve your session token via Playwright MCP
-4. Find your personal collection ID: "Klajdi Ziaj's Personal Collection"
-5. Create the card with the provided SQL
-6. Return the shareable Metabase URL
+**Use GUI questions for:**
+- ✅ Simple aggregations: count, sum, distinct, avg
+- ✅ Group by date/category
+- ✅ Simple filters: equals, greater than, less than
+- ✅ Single table queries
 
-**If Step 1 fails, STOP and ask user to fix SQL. Do not proceed.**
+**Workflow:**
+1. **VALIDATE data access with snow cli first** (MANDATORY)
+2. Retrieve session token via Playwright MCP
+3. Find personal collection ID: "Klajdi Ziaj's Personal Collection"
+4. Look up table ID from database metadata
+5. Look up field IDs for columns needed
+6. Create card with MBQL query structure
+7. Return shareable Metabase URL
+
+---
+
+### Fallback to SQL Queries (ONLY WHEN NEEDED)
+
+**Only create SQL cards when GUI cannot express the query:**
+- Complex JOINs with aliases or multiple tables
+- CTEs (WITH clauses) or subqueries
+- Window functions (ROW_NUMBER, LAG, LEAD, etc.)
+- Custom SQL expressions not supported by MBQL
+- UNION or other set operations
+
+<example>
+# User explicitly provides SQL with CTE
+User: Create a Metabase card with this SQL: WITH base AS (SELECT...) SELECT * FROM base
+
+Assistant will:
+1. Validate SQL with snow cli
+2. Create SQL card (native query)
+3. Return URL
+(Note: SQL cards have limited drill-down capabilities)
+</example>
 
 **Default Settings:**
 - **Collection**: "Klajdi Ziaj's Personal Collection" (automatically found)
 - **Database**: `1` (main Snowflake PROD_DB)
-- **Display Type**: `table` (unless specified otherwise)
+- **Display Type**: Match user's request (`bar`, `line`, `table`, etc.)
 
 **Available Display Types:**
-- `table`: Standard table view (default)
-- `bar`: Bar chart
-- `line`: Line chart
+- `bar`: Bar chart (great for categories and time series)
+- `line`: Line chart (best for trends over time)
+- `table`: Standard table view
 - `pie`: Pie chart
 - `scalar`: Single number
 - `row`: Row chart

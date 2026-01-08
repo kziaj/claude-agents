@@ -29,6 +29,9 @@ Key Metabase API endpoints:
   - `GET /api/dashboard/:id` - Get dashboard
   - `GET /api/dashboard/:dashboard-id/dashcard/:dashcard-id/card/:card-id/query` - Execute dashboard card query
   - `POST /api/dashboard` - Create dashboard
+- **Database Metadata**: https://www.metabase.com/docs/latest/api#tag/apidatabase
+  - `GET /api/database/:id/metadata` - Get all tables and fields for a database
+  - `GET /api/table/:id/query_metadata` - Get detailed field metadata for a table
 
 ## Getting the Session Token
 
@@ -59,6 +62,176 @@ If Playwright MCP is unavailable or fails, ask user to retrieve their `metabase.
 3. Go to **Application** tab → **Cookies** → select the Metabase domain
 4. Find `metabase.SESSION` cookie and copy its **Value**
 5. Provide the value (format: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`)
+
+## Query Types: GUI Questions vs SQL Queries
+
+Metabase supports two types of questions:
+
+### 1. GUI Questions (MBQL) - PREFERRED
+**Use this by default** - enables seamless drill-down functionality
+
+- **Type:** `"query"` with MBQL (Metabase Query Language)
+- **Pros:**
+  - ✅ Full drill-down capability in Metabase UI
+  - ✅ Visual query builder for users
+  - ✅ Better integration with Metabase features
+  - ✅ Column-level permissions respected
+- **Cons:**
+  - Requires looking up table IDs and field IDs
+  - Limited to simpler query patterns
+
+**Example MBQL structure:**
+```json
+{
+  "dataset_query": {
+    "type": "query",
+    "query": {
+      "source-table": 123,
+      "aggregation": [["distinct", ["field", 456, null]]],
+      "breakout": [["field", 789, {"temporal-unit": "month"}]],
+      "filter": ["=", ["field", 101, null], "Approved"]
+    },
+    "database": 1
+  },
+  "display": "bar"
+}
+```
+
+### 2. SQL Queries (Native) - FALLBACK ONLY
+**Only use when MBQL cannot express the query**
+
+- **Type:** `"native"` with raw SQL
+- **Pros:**
+  - Can express any SQL query
+  - Works with CTEs, window functions, complex joins
+- **Cons:**
+  - ❌ Limited drill-down capabilities
+  - ❌ No visual query builder
+  - ❌ Users must edit SQL directly
+
+**When to fall back to SQL:**
+- Complex JOINs with aliases or multiple tables
+- CTEs (WITH clauses) or subqueries
+- Window functions (ROW_NUMBER, LAG, LEAD, etc.)
+- Custom SQL expressions not supported by MBQL
+- UNION or other set operations
+
+## Looking Up Table and Field IDs
+
+To create GUI questions, you need numeric IDs for tables and fields.
+
+### Step 1: Get Database Metadata
+
+```bash
+curl -s --cookie "metabase.SESSION=$SESSION" \
+  "https://metabase-prod.ds.carta.rocks/api/database/1/metadata" | \
+  jq '.tables[] | select(.name == "CORE_FCT_ZIP_REQUESTS") | {id, schema, name}'
+```
+
+**Response:**
+```json
+{
+  "id": 123,
+  "schema": "DBT_VERIFIED_CORE",
+  "name": "CORE_FCT_ZIP_REQUESTS"
+}
+```
+
+### Step 2: Get Field Metadata for Table
+
+```bash
+curl -s --cookie "metabase.SESSION=$SESSION" \
+  "https://metabase-prod.ds.carta.rocks/api/table/123/query_metadata" | \
+  jq '.fields[] | {id, name, base_type}'
+```
+
+**Response:**
+```json
+[
+  {"id": 456, "name": "REQUEST_ID", "base_type": "type/Text"},
+  {"id": 789, "name": "REQUEST_COMPLETED_AT", "base_type": "type/DateTime"},
+  {"id": 101, "name": "REQUEST_STATUS_NAME", "base_type": "type/Text"}
+]
+```
+
+### Step 3: Build MBQL Query
+
+Use the IDs from above:
+- `source-table`: 123 (table ID)
+- `field` references: 456, 789, 101 (field IDs)
+
+## MBQL Common Patterns
+
+### Count Distinct Grouped by Month
+
+**Use case:** Month-over-month metrics (e.g., distinct zip requests)
+
+```json
+{
+  "dataset_query": {
+    "type": "query",
+    "query": {
+      "source-table": 123,
+      "aggregation": [["distinct", ["field", 456, null]]],
+      "breakout": [["field", 789, {"temporal-unit": "month"}]],
+      "filter": ["=", ["field", 101, null], "Approved"]
+    },
+    "database": 1
+  },
+  "display": "bar",
+  "visualization_settings": {}
+}
+```
+
+**Explanation:**
+- `source-table: 123` → CORE_FCT_ZIP_REQUESTS table
+- `aggregation: [["distinct", ["field", 456, null]]]` → COUNT(DISTINCT REQUEST_ID)
+- `breakout: [["field", 789, {"temporal-unit": "month"}]]` → GROUP BY DATE_TRUNC('month', REQUEST_COMPLETED_AT)
+- `filter: ["=", ["field", 101, null], "Approved"]` → WHERE REQUEST_STATUS_NAME = 'Approved'
+
+### Simple Count Grouped by Category
+
+```json
+{
+  "query": {
+    "source-table": 123,
+    "aggregation": [["count"]],
+    "breakout": [["field", 101, null]]
+  }
+}
+```
+
+### Sum with Filter
+
+```json
+{
+  "query": {
+    "source-table": 123,
+    "aggregation": [["sum", ["field", 999, null]]],
+    "breakout": [["field", 789, {"temporal-unit": "month"}]],
+    "filter": ["and",
+      ["=", ["field", 101, null], "Approved"],
+      [">", ["field", 789, null], "2025-01-01"]
+    ]
+  }
+}
+```
+
+### Multiple Aggregations
+
+```json
+{
+  "query": {
+    "source-table": 123,
+    "aggregation": [
+      ["count"],
+      ["sum", ["field", 999, null]],
+      ["avg", ["field", 888, null]]
+    ],
+    "breakout": [["field", 789, {"temporal-unit": "month"}]]
+  }
+}
+```
 
 ## Workflow
 
@@ -136,55 +309,46 @@ curl -s --cookie "metabase.SESSION=$SESSION" \
 2. **Personal Collection ID**: User's personal collection ("Klajdi Ziaj's Personal Collection")
 3. **Session token**: Same authentication as querying
 
-### ⚠️ CRITICAL: Validate SQL with snow cli First
+### ⚠️ CRITICAL: Validate with snow cli First
 
-**MANDATORY: Test ALL SQL queries using snow cli BEFORE creating or updating Metabase cards.**
+**MANDATORY: Test data access using snow cli BEFORE creating Metabase cards.**
 
 ```bash
-snow sql --query "YOUR_SQL_HERE" --format JSON
+snow sql --query "SELECT * FROM prod_db.dbt_verified_core.core_fct_zip_requests LIMIT 10" --format JSON
 ```
 
 **Why this is required:**
-- ✅ Catches syntax errors before card creation
 - ✅ Validates table access and Snowflake permissions
-- ✅ Ensures query performance is acceptable
-- ✅ Prevents creating broken/failing cards in Metabase
+- ✅ Confirms table/column names are correct
+- ✅ Ensures data availability
 - ✅ Respects row-level security and data access controls
 
-**Example validation workflow:**
-
-```bash
-# Test your SQL query first
-snow sql --query "SELECT * FROM prod_db.dbt_core.core_dim_users LIMIT 10" --format JSON
-
-# Verify:
-# 1. Query executes without errors
-# 2. Results look correct
-# 3. Performance is acceptable
-
-# ONLY THEN create Metabase card with validated SQL
-```
-
-**If snow cli fails, fix the SQL before attempting card creation. If snow cli succeeds, Metabase will succeed.**
+**Use for validation even when creating GUI questions** - you're not creating SQL cards, but you need to verify the table exists and is accessible.
 
 ### Workflow: Create a New Card
 
-#### Step 0: Validate SQL with snow cli (MANDATORY)
+**PREFERRED: Create GUI Question (MBQL)** → Falls back to SQL if needed
 
-**Before any card creation, test the SQL:**
+#### Step 0: Validate Data Access with snow cli (MANDATORY)
+
+**Before any card creation, validate table access:**
 
 ```bash
-snow sql --query "SELECT * FROM prod_db.dbt_core.core_dim_users WHERE is_active = true LIMIT 100" --format JSON
+snow sql --query "SELECT * FROM prod_db.dbt_verified_core.core_fct_zip_requests LIMIT 10" --format JSON
 ```
 
 **Confirm:**
 - Query executes successfully
-- Results are correct
+- Table and columns exist
 - No permission errors
 
-**If validation fails, DO NOT proceed to card creation. Fix SQL first.**
+**If validation fails, DO NOT proceed to card creation.**
 
-#### Step 1: Find User's Personal Collection ID
+#### Step 1: Get Session Token
+
+Use Playwright MCP to retrieve session cookie (see "Getting the Session Token" section above).
+
+#### Step 2: Find User's Personal Collection ID
 
 ```bash
 curl -s --cookie "metabase.SESSION=$SESSION" \
@@ -200,15 +364,96 @@ Returns:
 }
 ```
 
-#### Step 2: Create the Card
+#### Step 3: Look Up Table ID
+
+Get the numeric table ID for your source table:
+
+```bash
+curl -s --cookie "metabase.SESSION=$SESSION" \
+  "https://metabase-prod.ds.carta.rocks/api/database/1/metadata" | \
+  jq '.tables[] | select(.schema == "DBT_VERIFIED_CORE" and .name == "CORE_FCT_ZIP_REQUESTS") | {id, schema, name}'
+```
+
+**Example response:**
+```json
+{"id": 123, "schema": "DBT_VERIFIED_CORE", "name": "CORE_FCT_ZIP_REQUESTS"}
+```
+
+#### Step 4: Look Up Field IDs
+
+Get the numeric field IDs for columns you'll use:
+
+```bash
+curl -s --cookie "metabase.SESSION=$SESSION" \
+  "https://metabase-prod.ds.carta.rocks/api/table/123/query_metadata" | \
+  jq '.fields[] | select(.name == "REQUEST_ID" or .name == "REQUEST_COMPLETED_AT" or .name == "REQUEST_STATUS_NAME") | {id, name, base_type}'
+```
+
+**Example response:**
+```json
+[
+  {"id": 456, "name": "REQUEST_ID", "base_type": "type/Text"},
+  {"id": 789, "name": "REQUEST_COMPLETED_AT", "base_type": "type/DateTime"},
+  {"id": 101, "name": "REQUEST_STATUS_NAME", "base_type": "type/Text"}
+]
+```
+
+#### Step 5: Create GUI Question Card
 
 **Required fields:**
 - `name`: Card title
-- `dataset_query`: Query structure with SQL
+- `dataset_query`: MBQL query structure
 - `database_id`: Database ID (typically `1`)
-- `collection_id`: Personal collection ID from Step 1
+- `collection_id`: Personal collection ID from Step 2
 - `display`: Visualization type (`"table"`, `"bar"`, `"line"`, etc.)
 - `visualization_settings`: Empty object `{}`
+
+**Example: Create MoM distinct count bar chart**
+
+```bash
+curl -s --cookie "metabase.SESSION=$SESSION" \
+  -X POST "https://metabase-prod.ds.carta.rocks/api/card" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "MoM Distinct Approved Zip Requests",
+    "dataset_query": {
+      "type": "query",
+      "query": {
+        "source-table": 123,
+        "aggregation": [["distinct", ["field", 456, null]]],
+        "breakout": [["field", 789, {"temporal-unit": "month"}]],
+        "filter": ["=", ["field", 101, null], "Approved"]
+      },
+      "database": 1
+    },
+    "display": "bar",
+    "visualization_settings": {},
+    "collection_id": 456,
+    "description": "Month-over-month count of distinct approved zip requests"
+  }' | jq '{id, name, collection_id}'
+```
+
+**Response:**
+```json
+{
+  "id": 45678,
+  "name": "MoM Distinct Approved Zip Requests",
+  "collection_id": 456
+}
+```
+
+#### Step 6: Return Card URL
+
+Construct and display the URL:
+```
+https://metabase-prod.ds.carta.rocks/question/45678
+```
+
+---
+
+### Fallback: Create SQL Card (When MBQL Cannot Express Query)
+
+**Only use when the query requires SQL-only features** (CTEs, window functions, complex joins, etc.)
 
 **Example: Create a card with native SQL query**
 
@@ -217,62 +462,60 @@ curl -s --cookie "metabase.SESSION=$SESSION" \
   -X POST "https://metabase-prod.ds.carta.rocks/api/card" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "My Analysis",
+    "name": "Complex Query with CTE",
     "dataset_query": {
       "type": "native",
       "native": {
-        "query": "SELECT * FROM prod_db.dbt_core.core_dim_users LIMIT 100",
+        "query": "WITH base AS (SELECT * FROM prod_db.dbt_core.table) SELECT * FROM base",
         "template-tags": {}
       },
       "database": 1
     },
     "display": "table",
     "visualization_settings": {},
-    "collection_id": 123,
-    "description": "Analysis created via API"
+    "collection_id": 456,
+    "description": "Complex query requiring SQL"
   }' | jq '{id, name, collection_id}'
 ```
 
-**Response:**
-```json
-{
-  "id": 45678,
-  "name": "My Analysis",
-  "collection_id": 123
-}
-```
-
-#### Step 3: Return Card URL
-
-Construct and display the URL:
-```
-https://metabase-prod.ds.carta.rocks/question/45678
-```
+**Note:** SQL cards have limited drill-down capabilities compared to GUI questions.
 
 ### Card Creation User Flow
 
 **User provides:**
-- Card name (e.g., "Revenue Analysis")
-- SQL query (e.g., "SELECT * FROM prod_db.dbt_core.revenue LIMIT 10")
-- Optional: description, visualization type
+- Card name (e.g., "MoM Distinct Approved Zip Requests")
+- Description of what to measure (e.g., "distinct count of approved zip requests by month")
+- Optional: table name, filters, visualization type
 
 **Claude executes:**
-1. **VALIDATE SQL with snow cli first** (MANDATORY)
+
+1. **VALIDATE data access with snow cli first** (MANDATORY)
    ```bash
-   snow sql --query "USER_PROVIDED_SQL" --format JSON
+   snow sql --query "SELECT * FROM prod_db.dbt_verified_core.core_fct_zip_requests LIMIT 10" --format JSON
    ```
 2. Only if validation succeeds:
 3. Get session token via Playwright MCP
 4. Find personal collection ID (cache it for session)
-5. Create card with POST /api/card
-6. Return shareable URL
+5. **Determine if GUI question is possible:**
+   - **Simple aggregations** (count, sum, distinct, avg) → Use GUI (MBQL)
+   - **Group by date/category** → Use GUI (MBQL)
+   - **Simple filters** (equals, greater than, less than) → Use GUI (MBQL)
+   - **Complex SQL** (CTEs, window functions, complex joins) → Fall back to SQL
+6. Look up table ID and field IDs (for GUI questions)
+7. Create card with POST /api/card
+8. Return shareable URL
 
-**If Step 1 fails, STOP and ask user to fix SQL. Do not proceed to card creation.**
+**If Step 1 fails, STOP and ask user to fix table/column names.**
 
-**Example prompts:**
-- "Create a Metabase card called 'Daily Active Users' with this SQL: SELECT ..."
-- "Make a new question for revenue analysis: SELECT ..."
-- "Add a card to my personal collection with the query: ..."
+**Example prompts for GUI questions:**
+- "Create a Metabase bar chart: MoM distinct approved zip requests"
+- "Make a question showing count of users by department"
+- "Create a line chart of monthly revenue from the revenue table"
+
+**Example prompts requiring SQL fallback:**
+- "Create a card with this SQL: WITH base AS (...)" ← Has CTE
+- "Show running total of revenue using window functions" ← Has window function
+- "Create card joining 3 tables with custom aliases" ← Complex join
 
 ### Display Types
 
