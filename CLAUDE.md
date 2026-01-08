@@ -253,17 +253,28 @@ snow sql --query "SELECT * FROM prod_db.dbt_verified_core.your_table LIMIT 10" -
 
 ### Creating GUI Questions (PREFERRED)
 
-When the user asks to create a Metabase card with **simple aggregations**:
+**Use the `metabase-create-card` command for streamlined card creation:**
 
 <example>
 # "Create a bar chart showing MoM distinct approved zip requests"
-User: Create a Metabase bar chart: MoM distinct approved zip requests
+User: Create a Metabase bar chart: MoM distinct zip requests by status
 
 Assistant will:
-1. Validate data access with snow cli
-2. Look up table ID and field IDs via Metabase API
-3. Create GUI question using MBQL (Metabase Query Language)
-4. Return shareable URL
+1. Validate data access with snow cli (MANDATORY)
+2. Use metabase-create-card command with appropriate options
+3. Command handles session token, ID lookups, and caching automatically
+4. Return shareable Metabase URL
+
+Command used:
+metabase-create-card \
+  --name "MoM Distinct Zip Requests by Status" \
+  --table CORE_FCT_ZIP_REQUESTS \
+  --agg-type distinct \
+  --agg-field REQUEST_ID \
+  --breakout REQUEST_CREATED_AT,REQUEST_STATUS_NAME \
+  --temporal-unit month \
+  --display bar \
+  --stacked
 </example>
 
 **Use GUI questions for:**
@@ -272,7 +283,13 @@ Assistant will:
 - ✅ Simple filters: equals, greater than, less than
 - ✅ Single table queries
 
-**Workflow:**
+**Streamlined Workflow (with helper command):**
+1. **VALIDATE data access with snow cli first** (MANDATORY)
+2. Run `metabase-create-card` with appropriate flags
+3. Script handles: session token, collection ID, table IDs, field IDs, caching
+4. Return shareable Metabase URL
+
+**Manual Workflow (if command unavailable):**
 1. **VALIDATE data access with snow cli first** (MANDATORY)
 2. Retrieve session token via Playwright MCP
 3. Find personal collection ID: "Klajdi Ziaj's Personal Collection"

@@ -301,7 +301,72 @@ curl -s --cookie "metabase.SESSION=$SESSION" \
   -d '{}' > /tmp/output.json
 ```
 
-## Creating Cards
+## Creating Cards (Streamlined Method)
+
+### Using the metabase-create-card Helper Script (RECOMMENDED)
+
+The fastest way to create Metabase cards is using the `metabase-create-card` command, which handles all ID lookups and caching automatically.
+
+**Basic Usage:**
+
+```bash
+metabase-create-card \
+  --name "Card Name" \
+  --table TABLE_NAME \
+  --agg-type distinct \
+  --agg-field FIELD_NAME \
+  --breakout FIELD1,FIELD2 \
+  --display bar
+```
+
+**Example: MoM Distinct Count Stacked Bar Chart**
+
+```bash
+metabase-create-card \
+  --name "MoM Distinct Zip Requests by Status" \
+  --table CORE_FCT_ZIP_REQUESTS \
+  --agg-type distinct \
+  --agg-field REQUEST_ID \
+  --breakout REQUEST_CREATED_AT,REQUEST_STATUS_NAME \
+  --temporal-unit month \
+  --display bar \
+  --stacked
+```
+
+**Available Options:**
+
+- `--name NAME`: Card name (required)
+- `--table TABLE_NAME`: Table name without schema (default schema: DBT_VERIFIED_CORE)
+- `--schema SCHEMA`: Override default schema
+- `--agg-type TYPE`: Aggregation type: `count`, `distinct`, `sum`, `avg` (default: `distinct`)
+- `--agg-field FIELD`: Field to aggregate (required for distinct/sum/avg)
+- `--breakout FIELD1,FIELD2`: Comma-separated fields for grouping
+- `--temporal-unit UNIT`: For date breakouts: `month`, `day`, `year`
+- `--display TYPE`: Visualization: `bar`, `line`, `table`, `pie` (default: `bar`)
+- `--stacked`: Enable stacked bars (for bar charts)
+- `--description DESC`: Card description
+- `--refresh-cache`: Force refresh of cached IDs
+
+**How it works:**
+
+1. Auto-retrieves session token (prompts if needed)
+2. Caches table IDs and field IDs in `~/.claude/skills/metabase-api/cache.json`
+3. Subsequent calls are faster (no ID lookups needed)
+4. Returns the Metabase URL for the new card
+
+**Cache Management:**
+
+The script maintains a cache at `~/.claude/skills/metabase-api/cache.json` with:
+- Your personal collection ID
+- Snowflake database ID (hardcoded to 9)
+- Table IDs (schema.table → numeric ID)
+- Field IDs (table_id.field → numeric ID)
+
+Use `--refresh-cache` if IDs become stale or tables/fields are added.
+
+---
+
+## Creating Cards (Manual Method)
 
 ### Prerequisites for Card Creation
 

@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy this file to cache.json - the metabase-create-card script will populate real IDs",
+  "collection_id": null,
+  "database_id": 9,
+  "tables": {},
+  "fields": {},
+  "last_updated": ""
+}

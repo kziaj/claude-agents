@@ -1,0 +1,330 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CACHE_FILE="$HOME/.claude/skills/metabase-api/cache.json"
+METABASE_URL="https://metabase-prod.ds.carta.rocks"
+
+usage() {
+    cat << EOF
+Usage: metabase-create-card [OPTIONS]
+
+Create a Metabase GUI question (card) with automatic ID lookups and caching.
+
+OPTIONS:
+    --name NAME              Card name (required)
+    --table TABLE_NAME       Full table name (e.g., CORE_FCT_ZIP_REQUESTS)
+    --schema SCHEMA          Schema name (default: DBT_VERIFIED_CORE)
+    --fields FIELD1,FIELD2   Comma-separated field names
+    --breakout FIELD         Field to group by (for breakout)
+    --temporal-unit UNIT     Temporal unit for date breakout (month, day, year)
+    --agg-type TYPE          Aggregation type: count, distinct, sum, avg (default: distinct)
+    --agg-field FIELD        Field to aggregate (for distinct, sum, avg)
+    --display TYPE           Display type: bar, line, table, pie (default: bar)
+    --stacked                Enable stacked bars (for bar charts)
+    --description DESC       Card description
+    --refresh-cache          Force refresh of cached IDs
+    --help                   Show this help message
+
+EXAMPLES:
+    # MoM distinct count stacked bar chart
+    metabase-create-card \\
+        --name "MoM Zip Requests by Status" \\
+        --table CORE_FCT_ZIP_REQUESTS \\
+        --agg-type distinct \\
+        --agg-field REQUEST_ID \\
+        --breakout REQUEST_CREATED_AT,REQUEST_STATUS_NAME \\
+        --temporal-unit month \\
+        --display bar \\
+        --stacked
+
+    # Simple count by category
+    metabase-create-card \\
+        --name "Requests by Status" \\
+        --table CORE_FCT_ZIP_REQUESTS \\
+        --agg-type count \\
+        --breakout REQUEST_STATUS_NAME \\
+        --display pie
+
+EOF
+    exit 1
+}
+
+log() {
+    echo "→ $*" >&2
+}
+
+error() {
+    echo "✗ Error: $*" >&2
+    exit 1
+}
+
+get_session_token() {
+    log "Getting Metabase session token via Playwright MCP..."
+    
+    # This would normally call the Playwright MCP tool
+    # For now, we'll extract from Island browser via claude code
+    # In practice, Claude Code will handle this via MCP
+    echo "PLACEHOLDER_SESSION_TOKEN"
+}
+
+init_cache() {
+    if [[ ! -f "$CACHE_FILE" ]] || [[ "${REFRESH_CACHE:-false}" == "true" ]]; then
+        log "Initializing cache..."
+        mkdir -p "$(dirname "$CACHE_FILE")"
+        cat > "$CACHE_FILE" << 'EOF'
+{
+  "collection_id": 1249,
+  "database_id": 9,
+  "tables": {},
+  "fields": {},
+  "last_updated": ""
+}
+EOF
+    fi
+}
+
+get_cached_value() {
+    local key="$1"
+    jq -r ".${key} // empty" "$CACHE_FILE" 2>/dev/null || echo ""
+}
+
+set_cached_value() {
+    local key="$1"
+    local value="$2"
+    local tmp=$(mktemp)
+    jq ".${key} = $value | .last_updated = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" "$CACHE_FILE" > "$tmp"
+    mv "$tmp" "$CACHE_FILE"
+}
+
+get_table_id() {
+    local schema="$1"
+    local table="$2"
+    local session="$3"
+    
+    local cache_key="tables.\"${schema}.${table}\""
+    local cached_id=$(get_cached_value "$cache_key")
+    
+    if [[ -n "$cached_id" ]] && [[ "$cached_id" != "null" ]]; then
+        echo "$cached_id"
+        return 0
+    fi
+    
+    log "Looking up table ID for ${schema}.${table}..."
+    local db_id=$(get_cached_value "database_id")
+    
+    local table_id=$(curl -s --cookie "metabase.SESSION=$session" \
+        "${METABASE_URL}/api/database/${db_id}/metadata" | \
+        jq -r ".tables[] | select(.schema == \"$schema\" and .name == \"$table\") | .id")
+    
+    if [[ -z "$table_id" ]] || [[ "$table_id" == "null" ]]; then
+        error "Table ${schema}.${table} not found in Metabase"
+    fi
+    
+    set_cached_value "$cache_key" "$table_id"
+    echo "$table_id"
+}
+
+get_field_ids() {
+    local table_id="$1"
+    local fields="$2"
+    local session="$3"
+    
+    log "Looking up field IDs for: $fields"
+    
+    local field_metadata=$(curl -s --cookie "metabase.SESSION=$session" \
+        "${METABASE_URL}/api/table/${table_id}/query_metadata")
+    
+    local field_ids=()
+    IFS=',' read -ra FIELD_ARRAY <<< "$fields"
+    for field in "${FIELD_ARRAY[@]}"; do
+        local cache_key="fields.\"${table_id}.${field}\""
+        local cached_id=$(get_cached_value "$cache_key")
+        
+        if [[ -n "$cached_id" ]] && [[ "$cached_id" != "null" ]]; then
+            field_ids+=("$cached_id")
+        else
+            local field_id=$(echo "$field_metadata" | jq -r ".fields[] | select(.name == \"$field\") | .id")
+            if [[ -z "$field_id" ]] || [[ "$field_id" == "null" ]]; then
+                error "Field $field not found in table"
+            fi
+            set_cached_value "$cache_key" "$field_id"
+            field_ids+=("$field_id")
+        fi
+    done
+    
+    echo "${field_ids[@]}"
+}
+
+create_mbql_query() {
+    local table_id="$1"
+    local agg_type="$2"
+    local agg_field_id="$3"
+    shift 3
+    local breakout_specs=("$@")
+    
+    local aggregation=""
+    case "$agg_type" in
+        count)
+            aggregation='[["count"]]'
+            ;;
+        distinct)
+            aggregation="[[\"distinct\", [\"field\", $agg_field_id, null]]]"
+            ;;
+        sum|avg)
+            aggregation="[[\"$agg_type\", [\"field\", $agg_field_id, null]]]"
+            ;;
+        *)
+            error "Unknown aggregation type: $agg_type"
+            ;;
+    esac
+    
+    local breakout_json=""
+    if [[ ${#breakout_specs[@]} -gt 0 ]]; then
+        local breakout_parts=()
+        for spec in "${breakout_specs[@]}"; do
+            breakout_parts+=("$spec")
+        done
+        breakout_json=$(printf '%s\n' "${breakout_parts[@]}" | jq -cs '.')
+    else
+        breakout_json="[]"
+    fi
+    
+    cat << EOF
+{
+  "source-table": $table_id,
+  "aggregation": $aggregation,
+  "breakout": $breakout_json
+}
+EOF
+}
+
+main() {
+    local NAME=""
+    local TABLE=""
+    local SCHEMA="DBT_VERIFIED_CORE"
+    local FIELDS=""
+    local BREAKOUT=""
+    local TEMPORAL_UNIT=""
+    local AGG_TYPE="distinct"
+    local AGG_FIELD=""
+    local DISPLAY="bar"
+    local STACKED="false"
+    local DESCRIPTION=""
+    local REFRESH_CACHE="false"
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --name) NAME="$2"; shift 2 ;;
+            --table) TABLE="$2"; shift 2 ;;
+            --schema) SCHEMA="$2"; shift 2 ;;
+            --fields) FIELDS="$2"; shift 2 ;;
+            --breakout) BREAKOUT="$2"; shift 2 ;;
+            --temporal-unit) TEMPORAL_UNIT="$2"; shift 2 ;;
+            --agg-type) AGG_TYPE="$2"; shift 2 ;;
+            --agg-field) AGG_FIELD="$2"; shift 2 ;;
+            --display) DISPLAY="$2"; shift 2 ;;
+            --stacked) STACKED="true"; shift ;;
+            --description) DESCRIPTION="$2"; shift 2 ;;
+            --refresh-cache) REFRESH_CACHE="true"; shift ;;
+            --help) usage ;;
+            *) error "Unknown option: $1" ;;
+        esac
+    done
+    
+    [[ -z "$NAME" ]] && error "Missing required parameter: --name"
+    [[ -z "$TABLE" ]] && error "Missing required parameter: --table"
+    
+    init_cache
+    
+    # Get session token (placeholder - will be replaced by actual Playwright MCP call)
+    log "Note: Session token retrieval via Playwright MCP should be called by Claude Code"
+    log "Please ensure you have an active Metabase session in Island browser"
+    read -p "Enter your metabase.SESSION cookie value: " SESSION
+    
+    # Get IDs
+    local TABLE_ID=$(get_table_id "$SCHEMA" "$TABLE" "$SESSION")
+    log "Table ID: $TABLE_ID"
+    
+    local ALL_FIELDS="$AGG_FIELD"
+    if [[ -n "$BREAKOUT" ]]; then
+        ALL_FIELDS="$AGG_FIELD,$BREAKOUT"
+    fi
+    [[ -z "$ALL_FIELDS" ]] && ALL_FIELDS="$FIELDS"
+    
+    local FIELD_IDS=($(get_field_ids "$TABLE_ID" "$ALL_FIELDS" "$SESSION"))
+    log "Field IDs: ${FIELD_IDS[*]}"
+    
+    # Build breakout specifications
+    local BREAKOUT_SPECS=()
+    if [[ -n "$BREAKOUT" ]]; then
+        IFS=',' read -ra BREAKOUT_FIELDS <<< "$BREAKOUT"
+        local idx=1  # Skip first ID (aggregation field)
+        [[ -z "$AGG_FIELD" ]] && idx=0
+        
+        for field in "${BREAKOUT_FIELDS[@]}"; do
+            local field_id="${FIELD_IDS[$idx]}"
+            if [[ "$TEMPORAL_UNIT" != "" ]] && [[ "$field" == *"_AT" || "$field" == *"DATE"* ]]; then
+                BREAKOUT_SPECS+=("[\"field\", $field_id, {\"temporal-unit\": \"$TEMPORAL_UNIT\"}]")
+                TEMPORAL_UNIT=""  # Only apply to first date field
+            else
+                BREAKOUT_SPECS+=("[\"field\", $field_id, null]")
+            fi
+            ((idx++))
+        done
+    fi
+    
+    # Build query
+    local AGG_FIELD_ID="${FIELD_IDS[0]}"
+    local QUERY=$(create_mbql_query "$TABLE_ID" "$AGG_TYPE" "$AGG_FIELD_ID" "${BREAKOUT_SPECS[@]}")
+    
+    # Build visualization settings
+    local VIZ_SETTINGS="{}"
+    if [[ "$STACKED" == "true" ]] && [[ "$DISPLAY" == "bar" ]]; then
+        VIZ_SETTINGS='{"stackable.stack_type": "stacked"}'
+    fi
+    
+    # Get collection ID
+    local COLLECTION_ID=$(get_cached_value "collection_id")
+    
+    # Create card
+    log "Creating Metabase card..."
+    local DB_ID=$(get_cached_value "database_id")
+    
+    local CARD_PAYLOAD=$(cat << EOF
+{
+  "name": "$NAME",
+  "description": "$DESCRIPTION",
+  "dataset_query": {
+    "type": "query",
+    "query": $QUERY,
+    "database": $DB_ID
+  },
+  "display": "$DISPLAY",
+  "visualization_settings": $VIZ_SETTINGS,
+  "collection_id": $COLLECTION_ID
+}
+EOF
+)
+    
+    local RESULT=$(curl -s --cookie "metabase.SESSION=$SESSION" \
+        -X POST "${METABASE_URL}/api/card" \
+        -H "Content-Type: application/json" \
+        -d "$CARD_PAYLOAD")
+    
+    local CARD_ID=$(echo "$RESULT" | jq -r '.id // empty')
+    if [[ -z "$CARD_ID" ]]; then
+        error "Failed to create card: $(echo "$RESULT" | jq -r '.message // "Unknown error"')"
+    fi
+    
+    local CARD_URL="${METABASE_URL}/question/${CARD_ID}"
+    
+    echo ""
+    echo "✓ Card created successfully!"
+    echo "  Name: $NAME"
+    echo "  ID: $CARD_ID"
+    echo "  URL: $CARD_URL"
+    echo ""
+}
+
+main "$@"

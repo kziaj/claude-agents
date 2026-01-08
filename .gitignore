@@ -6,6 +6,7 @@ todos/
 
 # Ignore local settings that shouldn't be shared
 settings.local.json
+skills/metabase-api/cache.json
 
 # Ignore session context files (personal work notes)
 session-context/*.md
