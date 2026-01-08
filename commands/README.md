@@ -24,6 +24,7 @@ Quick, single-purpose utilities for common dbt refactoring tasks.
 ### Utility Commands
 10. [bulk-model-rename](#10-bulk-model-rename)
 11. [update-yaml-metadata](#11-update-yaml-metadata)
+12. [metabase-create-card](#12-metabase-create-card) ⭐ NEW
 
 ---
 
@@ -505,6 +506,134 @@ validate-verified-standards --directory models/models_verified/core
 
 ---
 
+## 12. metabase-create-card ⭐ NEW
+
+**Purpose**: Streamlined Metabase card creation with automatic ID lookups and caching.
+
+**Version**: 1.0 (created January 2026)
+
+### Usage
+
+```bash
+~/.claude/commands/metabase-create-card OPTIONS
+
+# Example: MoM distinct count stacked bar chart
+metabase-create-card \
+  --name "MoM Distinct Zip Requests by Status" \
+  --table CORE_FCT_ZIP_REQUESTS \
+  --agg-type distinct \
+  --agg-field REQUEST_ID \
+  --breakout REQUEST_CREATED_AT,REQUEST_STATUS_NAME \
+  --temporal-unit month \
+  --display bar \
+  --stacked
+
+# Simple count by category
+metabase-create-card \
+  --name "Requests by Status" \
+  --table CORE_FCT_ZIP_REQUESTS \
+  --agg-type count \
+  --breakout REQUEST_STATUS_NAME \
+  --display pie
+```
+
+### What It Does
+
+1. Retrieves Metabase session token (prompts if needed)
+2. Looks up table ID from cache or Metabase API
+3. Looks up field IDs from cache or API
+4. Builds MBQL query structure
+5. Creates card with proper visualization settings
+6. Caches all IDs for future use
+7. Returns shareable Metabase URL
+
+### Options
+
+**Required:**
+- `--name NAME`: Card name
+- `--table TABLE_NAME`: Table name (default schema: DBT_VERIFIED_CORE)
+
+**Aggregation:**
+- `--agg-type TYPE`: count, distinct, sum, avg (default: distinct)
+- `--agg-field FIELD`: Field to aggregate (required for distinct/sum/avg)
+
+**Grouping:**
+- `--breakout FIELD1,FIELD2`: Comma-separated fields for grouping
+- `--temporal-unit UNIT`: month, day, year (for date fields)
+
+**Display:**
+- `--display TYPE`: bar, line, table, pie (default: bar)
+- `--stacked`: Enable stacked bars (for bar charts)
+
+**Optional:**
+- `--schema SCHEMA`: Override default schema
+- `--description DESC`: Card description
+- `--refresh-cache`: Force refresh cached IDs
+
+### Output
+
+- Creates card in "Klajdi Ziaj's Personal Collection"
+- Prints shareable URL: `https://metabase-prod.ds.carta.rocks/question/{id}`
+- Updates cache at `~/.claude/skills/metabase-api/cache.json`
+
+### Cache Management
+
+The command maintains a cache file at `~/.claude/skills/metabase-api/cache.json` with:
+- Personal collection ID (1249)
+- Snowflake database ID (9)
+- Table IDs: `{schema}.{table}` → numeric ID
+- Field IDs: `{table_id}.{field}` → numeric ID
+
+**Cache benefits:**
+- First run: ~1-2 minutes (lookups required)
+- Subsequent runs: ~15 seconds (IDs cached)
+
+Use `--refresh-cache` if tables/fields change or IDs become stale.
+
+### Time Savings
+
+- **Manual API approach**: 5-6 curl commands, ~2 minutes
+- **With command**: 1 command, ~15 seconds (cached)
+- **Saves**: ~1.75 minutes per card
+
+For frequent Metabase users creating 10+ cards/week, saves 15-20 minutes weekly.
+
+### When to Use
+
+✅ **Use When:**
+- Creating GUI questions (simple aggregations)
+- Need CLI automation for card creation
+- Creating multiple cards with similar patterns
+- Want ID caching for speed
+
+❌ **Don't Use When:**
+- Need complex SQL with CTEs/window functions (use native SQL instead)
+- Card requires custom viz settings not supported by CLI
+- Need to create SQL-based cards (not MBQL)
+
+### Prerequisites
+
+**Required:**
+- Active Metabase session in Island browser
+- Metabase session cookie (command will prompt if needed)
+- Access to Snowflake tables in DBT_VERIFIED_CORE schema
+
+**First-time setup:**
+```bash
+# Copy cache template
+cp ~/.claude/skills/metabase-api/cache.json.template \
+   ~/.claude/skills/metabase-api/cache.json
+```
+
+The command will populate the cache on first run.
+
+### Related
+
+- **Skill**: [metabase-api](../skills/metabase-api/) - Full API documentation
+- **CLAUDE.md**: Metabase Tool section - Global instructions
+
+---
+
 ## Decision Matrix
 
 ### How Many Models?
@@ -528,6 +657,7 @@ validate-verified-standards --directory models/models_verified/core
 | Understand lineage | `get-column-lineage` |
 | Check timestamp naming | `validate-timestamp-naming` |
 | Check verified/ standards | `validate-verified-standards` |
+| Create Metabase cards | `metabase-create-card` |
 
 ---
 

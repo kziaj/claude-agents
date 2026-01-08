@@ -485,6 +485,41 @@ Commands are quick, single-purpose utilities for common tasks.
 
 ---
 
+### 5. **metabase-create-card** ⭐ NEW
+*Streamlined Metabase card creation with ID caching*
+
+**Use When:**
+- Creating GUI questions (MBQL) from command line
+- Need automatic table/field ID lookups
+- Want to cache IDs for faster subsequent calls
+- Prefer CLI over manual API calls
+
+**Usage:**
+```bash
+metabase-create-card \
+  --name "Card Name" \
+  --table CORE_FCT_ZIP_REQUESTS \
+  --agg-type distinct \
+  --agg-field REQUEST_ID \
+  --breakout REQUEST_CREATED_AT,REQUEST_STATUS_NAME \
+  --temporal-unit month \
+  --display bar \
+  --stacked
+```
+
+**What It Does:**
+1. Auto-retrieves session token (prompts if needed)
+2. Caches collection ID, database ID, table IDs, field IDs
+3. Builds MBQL query structure
+4. Creates card via Metabase API
+5. Returns shareable URL
+
+**Time:** ~15 seconds (with cache), ~1-2 minutes (first run)
+
+📄 [Full Documentation](./commands/README.md#9-metabase-create-card)
+
+---
+
 ## When to Use What
 
 ### For Small Changes (1-3 models)
@@ -590,6 +625,7 @@ What's the goal?
 ├─ Rename with _scratch → migrate-model-to-scratch command
 ├─ Bulk rename pattern → bulk-model-rename command
 ├─ Remove unused columns → analyze-unused-columns command
+├─ Create Metabase cards → metabase-create-card command
 ├─ Systematic refactor → dbt-refactor-agent
 ├─ Analyze dependencies → model-migration-agent
 ├─ Create PR → pr-agent

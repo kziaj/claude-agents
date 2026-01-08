@@ -98,5 +98,6 @@ Once configured, the skill can:
 - Fall back to manual cookie retrieval if needed
 - Query Metabase Cards, Collections, and Dashboards
 - Export results to CSV or JSON
+- Create new cards using the `metabase-create-card` command (see `../../commands/README.md#12-metabase-create-card`)
 
-See `SKILL.md` for detailed usage instructions.
+See `SKILL.md` for detailed usage instructions and API reference.
